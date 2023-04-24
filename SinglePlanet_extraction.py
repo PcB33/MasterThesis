@@ -7,10 +7,9 @@ import statistics as st
 import scipy as sp
 import sys as sys
 from lifesim.util.radiation import black_body
-from astropy import units as u
 from functions import get_detection_threshold
 
-#create bus -----------------------------------------------------------------------------------------------------------
+#create bus ------------------------------------------------------------------------------------------------------------
 ex_bus = ls.Bus()
 
 #set basic scenario
@@ -19,7 +18,7 @@ ex_bus.data.options.set_scenario('baseline')
 #import catalog
 ex_bus.data.import_catalog(path+'05_output_files/standard10_scen1_spectrum.hdf5')
 
-#add the instrument, transmission and noise modules and connect them
+#add the instrument, transmission, extraction and noise modules and connect them
 instrument = ls.Instrument(name='inst')
 ex_bus.add_module(instrument)
 
@@ -35,17 +34,32 @@ ex_bus.add_module(localzodi)
 star_leak = ls.PhotonNoiseStar(name='star')
 ex_bus.add_module(star_leak)
 
+extr = ML_Extraction(name='extr')
+ex_bus.add_module(extr)
+
+
 ex_bus.connect(('inst', 'transm'))
 ex_bus.connect(('inst', 'exo'))
 ex_bus.connect(('inst', 'local'))
 ex_bus.connect(('inst', 'star'))
 ex_bus.connect(('star', 'transm'))
+ex_bus.connect(('extr', 'inst'))
+ex_bus.connect(('extr', 'transm'))
 
 #perform instrument.apply_options() in order to be able to create the extraction class
 instrument.apply_options()
 
+np.set_printoptions(threshold=sys.maxsize)
 
-#create test system (from old version) ---------------------------------------------------------------------------------
+'''
+#This part of the code creates the test planet from the old lifesim version (used to test the new version). To make it
+# run, uncomment this part and define the planet_number variable to be =0. Additionally, the following changes must be 
+# made to other parts of the code:
+# (1) In Extraction.py --> MC_spectrum_extraction --> self.signals, self.ideal_signals = self.inst.get_signal(), replace
+#       the argument for  flux_planet_spectrum with flux_planet_spectrum=[self.wl_bins * u.meter, self.single_data_row['planet_flux_use'][0] * u.photon / u.second / (u.meter ** 3)]
+# (2) In instrument.py --> get_signals(), change  the line self.adjust_bl_to_hz(hz_center=hz_center, distance_s=distance_s)
+#       to self.data.inst['bl'] = self.data.catalog['baseline'][0]
+
 
 first_row=pd.DataFrame(ex_bus.data.catalog.iloc[0]).transpose()
 
@@ -55,7 +69,7 @@ first_row['temp_s'][0]=5778 * 1
 first_row['l_sun'][0]=1
 first_row['radius_p'][0]=1.25
 first_row['semimajor_p'][0]=1.76
-first_row['angsep'][0] = first_row['semimajor_p'][0]/first_row['distance_s'][0] #angular separation (arcsec)
+first_row['angsep'][0] = first_row['semimajor_p'][0]/first_row['distance_s'][0]
 first_row['z'][0]=3
 first_row['temp_p'][0]=191.90
 first_row['baseline'][0] = 15.817 #optimal
@@ -79,7 +93,7 @@ fgamma = black_body(mode='planet',
 
 first_row['planet_flux_use'][0] = [fgamma]
 
-#dummy
+#dummy (not actually used)
 first_row['p_orb'][0] = 10
 first_row['mass_p'][0] = 2
 first_row['ecc_p'][0] = 0
@@ -109,43 +123,33 @@ first_row['snr_current'][0] = 26 #????
 first_row['t_slew'][0] = 0
 
 ex_bus.data.catalog=pd.concat([first_row, ex_bus.data.catalog],ignore_index=True)
-nu = ex_bus.data.catalog
-np.set_printoptions(threshold=sys.maxsize)
+'''
+
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-planet_number = 4#2799 #17 #2
+planet_number = 4 #2799 #17 #2
 n_MC = 5
 angsep_accuracy_def = 0.15
 phi_accuracy_def = 10
 
 
-#define the extraction class -------------------------------------------------------------------------------------------
-extraction = ML_Extraction(ex_bus, planet_number)
+#Call the main_parameter_extraction function ---------------------------------------------------------------------------
+spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma = extr.main_parameter_extraction(n_MC=n_MC, plot=True, single_planet_mode=True, planet_number=planet_number)
 
 
-#Get the extracted values for one planet -------------------------------------------------------------------------------
-#perform the extraction for one planet
-spectra, snrs, sigmas, rss, phiss, Jmaxs, Ts, Ts_sigma, Rs, Rs_sigma = extraction.MC_spectrum_extraction(n_MC=n_MC, plot=False)
-
-
+#Perform the data analysis ---------------------------------------------------------------------------------------------
 #Get median and MAD of extracted positions (angular separation and azimuthal position)
-#r_pixel = rss
-#r_angsep = 2*r_pixel*ex_bus.data.inst['hfov']/ex_bus.data.options.other['image_size']*180*3600/np.pi
-#print(rss)
-#r_median=st.median(r_angsep)
-#r_MAD = sp.stats.median_abs_deviation(r_angsep)
-
 r_median = st.median(rss)
 r_MAD = sp.stats.median_abs_deviation(rss)
 
-#phi_pixel = locs[:,1]
-#phi_angle = phi_pixel*extraction.n_steps/360
-#phi_median = st.median(phi_angle)
-#phi_MAD = sp.stats.median_abs_deviation(phi_angle)
+#modified phiss makes sure that e.g. azimuthal angle 1 and 359 are equivalent
+phiss_modified = np.empty_like(phiss)
+for i in range(phiss.size):
+    phiss_modified[i] = np.minimum(np.abs(0.-phiss[i]),np.abs(360.-phiss[i]))
 
-phi_median = st.median(phiss)
-phi_MAD = sp.stats.median_abs_deviation(phiss)
+phi_median = st.median(phiss_modified)
+phi_MAD = sp.stats.median_abs_deviation(phiss_modified)
 
 print('')
 print('true r (in angsep):',np.round(ex_bus.data.catalog['angsep'][planet_number],5))
@@ -163,24 +167,29 @@ print('snr_extracted:',np.round(mean_s,5),'+/-',np.round(std_s,5))
 print('')
 
 
-
-#Get detection threshold
+#Get detection threshold and median/MAD of the extracted Jmaxs
 eta_threshold_5 = get_detection_threshold(L=len(ex_bus.data.inst['wl_bins']), sigma=5)
+
+Jmax_median = st.median(Jmaxs)
+Jmax_MAD = sp.stats.median_abs_deviation(Jmaxs)
+
 print('Detection threshold eta (5 sigma) = ',np.round(eta_threshold_5,0))
+print('Median maximum of cost function J:',np.round(Jmax_median,0),'+/-',np.round(Jmax_MAD,0))
+print('')
 
 
 #Count number of failed extractions. position_fails mean failed position extractions, total_fails means either failed position extraction or J below threshold
 position_fails = 0
 total_fails = 0
 
+
 for i in range(n_MC):
     if ((rss[i] > (ex_bus.data.catalog['angsep'][planet_number]*(1+angsep_accuracy_def))) or (rss[i] < (ex_bus.data.catalog['angsep'][planet_number]*(1-angsep_accuracy_def)))):
         position_fails += 1
         total_fails += 1
-    elif ((np.abs(phiss[i]-extraction.planet_azimuth)+phi_accuracy_def) % 360 > phi_accuracy_def+phi_accuracy_def):
+    elif ((np.abs(phiss[i]-extr.planet_azimuth)+phi_accuracy_def) % 360 > phi_accuracy_def+phi_accuracy_def):
         position_fails += 1
         total_fails += 1
-    #ToDo: How to get the "right" Jmax?
     elif (Jmaxs[i] < eta_threshold_5):
         total_fails += 1
 
