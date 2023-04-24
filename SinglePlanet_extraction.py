@@ -114,8 +114,8 @@ np.set_printoptions(threshold=sys.maxsize)
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-planet_number = 0#2799 #17
-n_MC = 1
+planet_number = 4#2799 #17 #2
+n_MC = 5
 angsep_accuracy_def = 0.15
 phi_accuracy_def = 10
 
@@ -126,7 +126,7 @@ extraction = ML_Extraction(ex_bus, planet_number)
 
 #Get the extracted values for one planet -------------------------------------------------------------------------------
 #perform the extraction for one planet
-spectra, snrs, sigmas, rss, phiss, Jmaxs_wl, Jmaxs, Ts, Ts_sigma, Rs, Rs_sigma = extraction.MC_spectrum_extraction(n_MC=n_MC, plot=False)
+spectra, snrs, sigmas, rss, phiss, Jmaxs, Ts, Ts_sigma, Rs, Rs_sigma = extraction.MC_spectrum_extraction(n_MC=n_MC, plot=False)
 
 
 #Get median and MAD of extracted positions (angular separation and azimuthal position)
