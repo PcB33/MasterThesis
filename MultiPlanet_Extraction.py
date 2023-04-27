@@ -3,14 +3,7 @@ import pandas as pd
 import lifesim as ls
 from Extraction import ML_Extraction
 from auxiliary import path
-import statistics as st
-import scipy as sp
-import sys as sys
-from lifesim.util.radiation import black_body
-from astropy import units as u
-from functions import get_detection_threshold
 import operator as op
-from tqdm import tqdm
 
 #create bus ------------------------------------------------------------------------------------------------------------
 ex_bus = ls.Bus()
@@ -19,7 +12,7 @@ ex_bus = ls.Bus()
 ex_bus.data.options.set_scenario('baseline')
 
 #import catalog
-ex_bus.data.import_catalog(path+'05_output_files/standard10_scen1_spectrum.hdf5')
+ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard10_scen1_spectrum.hdf5')
 
 #add the instrument, transmission, extraction and noise modules and connect them
 instrument = ls.Instrument(name='inst')
@@ -54,15 +47,15 @@ instrument.apply_options()
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-n_MC = 10
+n_MC = 1
 mu = 0
 
 
-#define parameters with which to slice your dataset
+#define parameters with which to slice your dataset --------------------------------------------------------------------
 parameters = np.array([
         ['detected', op.eq, 1],
         ['radius_p', op.ge, 0.5],
-        ['radius_p', op.le, 0.7],
+        ['radius_p', op.le, 1.5],
         ['flux_p', op.ge, 0.32],
         ['flux_p', op.le, 1.776],
 ])
@@ -72,7 +65,7 @@ operators = parameters.T[1]
 numbers = parameters.T[2]
 
 
-#create the mask containing only the datapoints as specified by the parameters
+#create the mask containing only the datapoints as specified by the parameters -----------------------------------------
 mask = ex_bus.data.catalog
 
 for i in range(attributes.size):
@@ -82,56 +75,5 @@ for i in range(attributes.size):
 ex_bus.data.catalog = mask
 
 
-extr.main_parameter_extraction(n_MC=n_MC, mu=mu, )
-
-'''
-#extract the data from the defined subset of the catalog ---------------------------------------------------------------
-#create lists to store extracted data
-extracted_spectra = []
-extracted_snrs = []
-extracted_sigmas = []
-extracted_Jmaxs = []
-extracted_rss = []
-extracted_phiss = []
-extracted_Ts = []
-extracted_Ts_sigma = []
-extracted_Rs = []
-extracted_Rs_sigma = []
-
-
-#run the extraction algorithm and save the data
-for i in tqdm(range(mask['radius_p'].size)):
-
-    #define the extraction class and get the parameters
-    extraction = ML_Extraction(bus=ex_bus,planet_number=i)
-    spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma = extraction.MC_spectrum_extraction(n_MC=n_MC, plot=False)
-
-    #store the data in the lists
-    extracted_spectra.append(spectra)
-    extracted_snrs.append(snrs)
-    extracted_sigmas.append(sigmas)
-    extracted_Jmaxs.append(Jmaxs)
-    extracted_rss.append(rss)
-    extracted_phiss.append(phiss)
-    extracted_Ts.append(Ts)
-    extracted_Ts_sigma.append(Ts_sigma)
-    extracted_Rs.append(Rs)
-    extracted_Rs_sigma.append(Rs_sigma)
-
-
-#add the data to the bus catalog
-ex_bus.data.catalog['extracted_spectra'] = extracted_spectra
-ex_bus.data.catalog['extracted_snrs'] = extracted_snrs
-ex_bus.data.catalog['extracted_sigmas'] = extracted_sigmas
-ex_bus.data.catalog['extracted_Jmaxs'] = extracted_Jmaxs
-ex_bus.data.catalog['extracted_rss'] = extracted_rss
-ex_bus.data.catalog['extracted_phiss'] = extracted_phiss
-ex_bus.data.catalog['extracted_Ts'] = extracted_Ts
-ex_bus.data.catalog['extracted_Ts_sigma'] = extracted_Ts_sigma
-ex_bus.data.catalog['extracted_Rs'] = extracted_Rs
-ex_bus.data.catalog['extracted_Rs_sigma'] = extracted_Rs_sigma
-
-
-#save the catalog
-ex_bus.data.catalog.to_csv(path+'05_output_files/changeme.csv')
-'''
+#Perform the extraction and save the file in /05_output_files/changeme.csv ---------------------------------------------
+extr.main_parameter_extraction(n_MC=n_MC, mu=mu, filepath=path+'05_output_files/')

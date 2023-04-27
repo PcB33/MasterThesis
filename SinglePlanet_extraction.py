@@ -6,8 +6,7 @@ from auxiliary import path
 import statistics as st
 import scipy as sp
 import sys as sys
-from lifesim.util.radiation import black_body
-from functions import get_detection_threshold
+
 
 #create bus ------------------------------------------------------------------------------------------------------------
 ex_bus = ls.Bus()
@@ -16,7 +15,7 @@ ex_bus = ls.Bus()
 ex_bus.data.options.set_scenario('baseline')
 
 #import catalog
-ex_bus.data.import_catalog(path+'05_output_files/standard10_scen1_spectrum.hdf5')
+ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard10_scen1_spectrum.hdf5')
 
 #add the instrument, transmission, extraction and noise modules and connect them
 instrument = ls.Instrument(name='inst')
@@ -128,14 +127,15 @@ ex_bus.data.catalog=pd.concat([first_row, ex_bus.data.catalog],ignore_index=True
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-planet_number = 4 #2799 #17 #2
-n_MC = 5
+planet_number = 2798 #11 #24 #4 #2799 #17 #2
+n_MC = 1
+mu=0
 angsep_accuracy_def = 0.15
 phi_accuracy_def = 10
 
 
 #Call the main_parameter_extraction function ---------------------------------------------------------------------------
-spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma = extr.main_parameter_extraction(n_MC=n_MC, plot=True, single_planet_mode=True, planet_number=planet_number)
+spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma = extr.main_parameter_extraction(n_MC=n_MC, plot=True, ideal=False, mu=mu, single_planet_mode=True, planet_number=planet_number)
 
 
 #Perform the data analysis ---------------------------------------------------------------------------------------------
@@ -168,7 +168,7 @@ print('')
 
 
 #Get detection threshold and median/MAD of the extracted Jmaxs
-eta_threshold_5 = get_detection_threshold(L=len(ex_bus.data.inst['wl_bins']), sigma=5)
+eta_threshold_5 = extr.get_detection_threshold(sigma=5)
 
 Jmax_median = st.median(Jmaxs)
 Jmax_MAD = sp.stats.median_abs_deviation(Jmaxs)
