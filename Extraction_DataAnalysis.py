@@ -7,7 +7,7 @@ import corner as corner
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-file = 'B_noise.csv'
+file = 'changeme.csv'
 angsep_accuracy_def = 0.15
 phi_accuracy_def = 10
 true_phi = 0
@@ -16,9 +16,6 @@ true_phi = 0
 #load the input file, calculate some required variables and define empty lists of quantities to be stored --------------
 extracted_data = pd.read_csv(path+'/05_output_files/multiextraction/'+file)
 n_planets = len(extracted_data.index)
-#ToDo remove n_MC? (always = 1?). Discuss this again (do you even have to change the Extraction?)
-n_MC = len(eval(extracted_data['extracted_snrs'][0]))
-total_runs = n_planets*n_MC
 
 L = len(eval(extracted_data['extracted_spectra'][0])[0])
 eta_threshold_5 = get_detection_threshold(L, 5)
@@ -42,56 +39,48 @@ for i in range(n_planets):
     true_T = extracted_data['temp_p'][i]
     true_R = extracted_data['radius_p'][i]
 
-    snr_i = eval(extracted_data['extracted_snrs'][i])
-    r_i = eval(extracted_data['extracted_rss'][i])
-    phi_i = eval(extracted_data['extracted_phiss'][i])
-    T_i = eval(extracted_data['extracted_Ts'][i])
-    R_i = eval(extracted_data['extracted_Rs'][i])
-    jmax_i = eval(extracted_data['extracted_Jmaxs'][i])
-
-    for j in range(n_MC):
-        snr_i_j = snr_i[j]
-        r_i_j = r_i[j]
-        phi_i_j = phi_i[j]
-        T_i_j = T_i[j]
-        R_i_j = R_i[j]
-        jmax_i_j = jmax_i[j]
+    snr_i = eval(extracted_data['extracted_snrs'][i])[0]
+    r_i = eval(extracted_data['extracted_rss'][i])[0]
+    phi_i = eval(extracted_data['extracted_phiss'][i])[0]
+    T_i = eval(extracted_data['extracted_Ts'][i])[0]
+    R_i = eval(extracted_data['extracted_Rs'][i])[0]
+    jmax_i = eval(extracted_data['extracted_Jmaxs'][i])[0]
 
 
-        if (jmax_i_j < eta_threshold_5):
-            total_fails += 1
+    if (jmax_i < eta_threshold_5):
+        total_fails += 1
 
-        elif ((r_i_j > true_angsep*(1+angsep_accuracy_def)) or (r_i_j < true_angsep*(1-angsep_accuracy_def))):
-            position_fails += 1
-            total_fails += 1
+    elif ((r_i > true_angsep*(1+angsep_accuracy_def)) or (r_i < true_angsep*(1-angsep_accuracy_def))):
+        position_fails += 1
+        total_fails += 1
 
-            #ToDo think about this (if you include them, T_mean fucks up)
-            '''
-            SNR_ps_used.append(snr_ps)
-            SNR_ratios.append(snr_i_j / snr_ps)
-            Theta_ratios.append(r_i_j / true_angsep)
-            T_ratios.append(T_i_j / true_T)
-            R_ratios.append(R_i_j / true_R)
-            '''
+        #ToDo think about this (if you include them, T_mean fucks up)
+        '''
+        SNR_ps_used.append(snr_ps)
+        SNR_ratios.append(snr_i / snr_ps)
+        Theta_ratios.append(r_i / true_angsep)
+        T_ratios.append(T_i / true_T)
+        R_ratios.append(R_i / true_R)
+        '''
 
-        elif ((np.abs(phi_i_j-true_phi)+phi_accuracy_def) % 360 > phi_accuracy_def+phi_accuracy_def):
-            position_fails += 1
-            total_fails += 1
+    elif ((np.abs(phi_i-true_phi)+phi_accuracy_def) % 360 > phi_accuracy_def+phi_accuracy_def):
+        position_fails += 1
+        total_fails += 1
 
-            '''
-            SNR_ps_used.append(snr_ps)
-            SNR_ratios.append(snr_i_j / snr_ps)
-            Theta_ratios.append(r_i_j / true_angsep)
-            T_ratios.append(T_i_j / true_T)
-            R_ratios.append(R_i_j / true_R)
-            '''
+        '''
+        SNR_ps_used.append(snr_ps)
+        SNR_ratios.append(snr_i / snr_ps)
+        Theta_ratios.append(r_i / true_angsep)
+        T_ratios.append(T_i / true_T)
+        R_ratios.append(R_i / true_R)
+        '''
 
-        else:
-            SNR_ps_used.append(snr_ps)
-            SNR_ratios.append(snr_i_j / snr_ps)
-            Theta_ratios.append(r_i_j / true_angsep)
-            T_ratios.append(T_i_j / true_T)
-            R_ratios.append(R_i_j / true_R)
+    else:
+        SNR_ps_used.append(snr_ps)
+        SNR_ratios.append(snr_i / snr_ps)
+        Theta_ratios.append(r_i / true_angsep)
+        T_ratios.append(T_i / true_T)
+        R_ratios.append(R_i / true_R)
 
 
 
@@ -115,8 +104,8 @@ std_T_ratio = np.std(T_ratios)
 mean_R_ratio = R_ratios.mean()
 std_R_ratio = np.std(R_ratios)
 
-location_accuracy = (total_runs - position_fails)/total_runs
-total_accuracy = (total_runs - total_fails)/total_runs
+location_accuracy = (n_planets - position_fails)/n_planets
+total_accuracy = (n_planets - total_fails)/n_planets
 
 
 print('Failed extractions: ',total_fails, ' => ',np.round(total_accuracy*100,2),'% success rate')

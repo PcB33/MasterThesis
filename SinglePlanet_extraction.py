@@ -54,7 +54,7 @@ np.set_printoptions(threshold=sys.maxsize)
 #This part of the code creates the test planet from the old lifesim version (used to test the new version). To make it
 # run, uncomment this part and define the planet_number variable to be =0. Additionally, the following changes must be 
 # made to other parts of the code:
-# (1) In Extraction.py --> MC_spectrum_extraction --> self.signals, self.ideal_signals = self.inst.get_signal(), replace
+# (1) In Extraction.py --> single_spectrum_extraction --> self.signals, self.ideal_signals = self.inst.get_signal(), replace
 #       the argument for  flux_planet_spectrum with flux_planet_spectrum=[self.wl_bins * u.meter, self.single_data_row['planet_flux_use'][0] * u.photon / u.second / (u.meter ** 3)]
 # (2) In instrument.py --> get_signals(), change  the line self.adjust_bl_to_hz(hz_center=hz_center, distance_s=distance_s)
 #       to self.data.inst['bl'] = self.data.catalog['baseline'][0]
@@ -127,15 +127,15 @@ ex_bus.data.catalog=pd.concat([first_row, ex_bus.data.catalog],ignore_index=True
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-planet_number = 2798 #11 #24 #4 #2799 #17 #2
-n_MC = 1
+planet_number = 2 #11 #24 #4 #2799 #17 #2
+n_run = 1
 mu=0
 angsep_accuracy_def = 0.15
 phi_accuracy_def = 10
 
 
 #Call the main_parameter_extraction function ---------------------------------------------------------------------------
-spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma = extr.main_parameter_extraction(n_MC=n_MC, plot=True, ideal=False, mu=mu, single_planet_mode=True, planet_number=planet_number)
+spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma = extr.main_parameter_extraction(n_run=n_run, plot=True, ideal=False, mu=mu, single_planet_mode=True, planet_number=planet_number)
 
 
 #Perform the data analysis ---------------------------------------------------------------------------------------------
@@ -183,7 +183,7 @@ position_fails = 0
 total_fails = 0
 
 
-for i in range(n_MC):
+for i in range(n_run):
     if ((rss[i] > (ex_bus.data.catalog['angsep'][planet_number]*(1+angsep_accuracy_def))) or (rss[i] < (ex_bus.data.catalog['angsep'][planet_number]*(1-angsep_accuracy_def)))):
         position_fails += 1
         total_fails += 1
@@ -193,8 +193,8 @@ for i in range(n_MC):
     elif (Jmaxs[i] < eta_threshold_5):
         total_fails += 1
 
-location_accuracy = (n_MC - position_fails)/n_MC
-total_accuracy = (n_MC - total_fails)/n_MC
+location_accuracy = (n_run - position_fails)/n_run
+total_accuracy = (n_run - total_fails)/n_run
 
 print('Failed location estimates: ',position_fails,' => ',location_accuracy*100,'% success rate')
 print('Failed extractions: ',total_fails, ' => ',total_accuracy*100,'% success rate')

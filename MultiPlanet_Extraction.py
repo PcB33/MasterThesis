@@ -12,7 +12,7 @@ ex_bus = ls.Bus()
 ex_bus.data.options.set_scenario('baseline')
 
 #import catalog
-ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard10_scen1_spectrum.hdf5')
+ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard500_scen1_spectrum.hdf5')
 
 #add the instrument, transmission, extraction and noise modules and connect them
 instrument = ls.Instrument(name='inst')
@@ -47,7 +47,6 @@ instrument.apply_options()
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-n_MC = 1
 mu = 0
 
 
@@ -76,4 +75,4 @@ ex_bus.data.catalog = mask
 
 
 #Perform the extraction and save the file in /05_output_files/changeme.csv ---------------------------------------------
-extr.main_parameter_extraction(n_MC=n_MC, mu=mu, filepath=path+'05_output_files/')
+extr.main_parameter_extraction(n_run=1, mu=mu, filepath=path+'05_output_files/')

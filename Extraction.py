@@ -9,6 +9,7 @@ from lifesim.util.radiation import black_body
 from plots import plot_planet_SED_and_SNR, plot_multi_map
 from lifesim.core.modules import ExtractionModule
 from tqdm import tqdm
+import multiprocessing
 
 #ToDo Question: Where should I put pol_to_cart_map, plot_planet_SED_and_SNR and plot_multi_map? Just in this class?
 
@@ -41,9 +42,9 @@ class ML_Extraction(ExtractionModule):
         :param T: np.ndarray of shape (L,radial_ang_px,n_steps) containing the tm_chop transmission factor at each pixel
                 on the image []
 
-        :return B: np.ndarray of shape (L,radial_ang_px,n_steps); matrix used for the calcuation of the estimated flux
+        :return B: np.ndarray of shape (L,radial_ang_px,n_steps); matrix used for the calculation of the estimated flux
                 as described in Appendix B of LIFE II []
-        :return C: np.ndarray of shape (L,radial_ang_px,n_steps); matrix used for the calcuation of the estimated flux
+        :return C: np.ndarray of shape (L,radial_ang_px,n_steps); matrix used for the calculation of the estimated flux
                 and the cost function as described in Appendix B of LIFE II []
         :return B_noise: np.ndarray of shape (L,radial_ang_px,n_steps); matrix used for the calculation of the sigma of
                 the signal. It must be calculated without the planet signal (based on the noise only)
@@ -59,15 +60,21 @@ class ML_Extraction(ExtractionModule):
         B_vec = (T ** 2).sum(axis=-1) / var[:, np.newaxis]
         B = np.repeat(B_vec[:, :, np.newaxis], n_p, axis=2)
 
-        #ToDo: If there is no noise (i.e. ideal_signals = True, the concept of SNR doesn't really make sense anyway
         if (self.ideal == True):
-            B_noise = B
+            #If no noise is included, B_noise is obsolete
+            B_noise = np.zeros_like(B)
 
         else:
+            #ToDo question: Is it legit that we take the noise? we don't actually know it so it's a bit artificial..
+            #Get variance of received noise (without signal) and calculate B analogously to before for this variance
             var_noise = np.var(self.noise, axis=1, ddof=1)
             B_vec_noise = (T ** 2).sum(axis=-1) / var_noise[:, np.newaxis]
             B_noise = np.repeat(B_vec_noise[:, :, np.newaxis], n_p, axis=2)
 
+        '''
+        C = np.sum(T*signals[:,np.newaxis,:]/var[:,np.newaxis,np.newaxis],axis=2)
+        C = C[:,:,np.newaxis]
+        '''
         # Take T twice back to back
         T_exp = np.tile(T, 2)
 
@@ -80,6 +87,7 @@ class ML_Extraction(ExtractionModule):
         # Use antisymmetry of C to speed up calculation
         C = np.concatenate((C, -C), axis=2)
         C = (C.T / var).T
+
 
         return B, C, B_noise
 
@@ -178,9 +186,9 @@ class ML_Extraction(ExtractionModule):
         This function calculates the estimated flux received by the planet based on the matrices B and C which are
         given as input. See LIFE II Appendix B for an explanation of the calculations
 
-        :param B: np.ndarray of shape (L,radial_ang_px,n_steps). matrix used for the calcuation of the estimated flux
+        :param B: np.ndarray of shape (L,radial_ang_px,n_steps). matrix used for the calculation of the estimated flux
                 as described in Appendix B of LIFE II []
-        :param C: np.ndarray of shape (L,radial_ang_px,n_steps). matrix used for the calcuation of the estimated flux
+        :param C: np.ndarray of shape (L,radial_ang_px,n_steps). matrix used for the calculation of the estimated flux
                 and the cost function as described in Appendix B of LIFE II []
         :param mu: float, regularization parameter []
 
@@ -264,22 +272,37 @@ class ML_Extraction(ExtractionModule):
         theta_max = np.unravel_index(np.argmax(self.J, axis=None), self.J.shape)
         (r, p) = theta_max
 
+
         #Calculate the estimated flux at the position of Jmax
         Fp_est = F[:, r, p]
         Fp_est_pos = F_pos[:, r, p]
+
+        '''
+        print(r)
+        x2 = np.delete(F_pos,r, axis=1)
+        x2=np.delete(x2, p, axis=2)
+        #print(x2.shape)
+        x2=np.mean(x2, axis=(1,2))
+        #print(x2.shape)
+        #print(x2)
+        print(Fp_est_pos)
+        '''
+        Fp_use = Fp_est_pos
+
 
 
         if (self.ideal == True):
             #Sigma equal to zero leads to errors in the curve fitting; take very small value instead
             sigma_est = np.ones_like(Fp_est) * 10 ** (-9)
-            #SNR is not a well-defined qunatity
+            #SNR is not a well-defined quantity
             SNR_est = np.inf
+
 
         else:
             #Calculate sigma at the position of Jmax
             sigma_est = self.B_noise[:, r, p] ** (-1 / 2)
             #Calculat the total SNR over all wavelength bins
-            SNR_est = np.sum((Fp_est_pos/ sigma_est) **2) ** (1 / 2)
+            SNR_est = np.sum((Fp_use / sigma_est) **2) ** (1 / 2)
 
 
         #Plot the cost function map if applicable
@@ -403,11 +426,11 @@ class ML_Extraction(ExtractionModule):
 
 
 
-    def MC_spectrum_extraction(self, n_MC=100, plot=False):
+    def single_spectrum_extraction(self, n_run=1, plot=False):
         '''
-        This is the core function of the ML_Extraction class that executes the Monte Carlo simulation of the signal
-        extraction for a single planet. In each MC run, the extracted spectrum, snr, sigma, planet positions and cost
-        function values are calculated based on the parameters in the bus catalog and random noise generation.
+        This is the core function of the ML_Extraction class that executes the signal extraction for a single planet.
+        In each run, the extracted spectrum, snr, sigma, planet positions and cost function values are calculated based
+        on the parameters in the bus catalog and random noise generation.
 
         In a first step, the signal (including noise) is generated by calling the instrument.get_signals function.
         Next, the cost_function is called to generate the transmission maps and the matrices required to calculate the
@@ -421,26 +444,26 @@ class ML_Extraction(ExtractionModule):
         position and returned for further processing. With these extracted spectra and sigmas, the planet temperature
         and radius can be calculated by fitting the values to a blackbody curve
 
-        :param n_MC: integer, number of MC runs to perform
-        :param plot: boolean; determines whether to show plots throughout the runs (only advised for small n_MC)
+        :param n_run: integer, number of runs to perform
+        :param plot: boolean; determines whether to show plots throughout the runs (only advised for small n_run)
         :param ideal: boolean; if True, no noise is included in the extraction
 
-        :return extracted spectra: np.ndarray of shape (n_MC,L); contains the extracted spectra per wavelength bin for
-                    each of the MC runs in [photons]
-        :return extracted snrs: np.ndarray of size n_MC; contains the extracted snrs for each of the MC runs over the
+        :return extracted spectra: np.ndarray of shape (n_run,L); contains the extracted spectra per wavelength bin for
+                    each of the runs in [photons]
+        :return extracted snrs: np.ndarray of size n_run; contains the extracted snrs for each of the runs over the
                     entire wavelength range []
-        :return extracted sigmas: np.ndarray of shape (n_MC,L); contains the sigmas for the extracted spectra
-                    per wavelength bin for each of the MC runs in [photons]
-        :return extracted Jmaxs: np.ndarray of size n_MC containing the maximum values of J over all wavelengths
-                    for every MC run []
-        :return rss: np.ndarray of size n_MC; contains the extracted angular separations for each of the MC runs
+        :return extracted sigmas: np.ndarray of shape (n_run,L); contains the sigmas for the extracted spectra
+                    per wavelength bin for each of the runs in [photons]
+        :return extracted Jmaxs: np.ndarray of size n_run containing the maximum values of J over all wavelengths
+                    for every run []
+        :return rss: np.ndarray of size n_run; contains the extracted angular separations for each of the runs
                     in [arcsec]
-        :return: phis: np.ndarray of size n_MC; contains the extracted azimuthal positions on the image for each of
-                    the MC runs in [degrees]
-        :return Ts: np.ndarray of size n_MC; extracted planet temperatures of every MC run in [K]
-        :return Ts_sigma: np.ndarray of size n_MC; uncertainties of the extracted planet temperatures of every MC run in [K]
-        :return Rs: np.ndarray of size n_MC; extracted planet radii of every MC run in [K]
-        :return Rs_sigma: np.ndarray of size n_MC; uncertainties of the extracted planet radii of every MC run in [K]
+        :return: phis: np.ndarray of size n_run; contains the extracted azimuthal positions on the image for each of
+                    the runs in [degrees]
+        :return Ts: np.ndarray of size n_run; extracted planet temperatures of every run in [K]
+        :return Ts_sigma: np.ndarray of size n_run; uncertainties of the extracted planet temperatures of every run in [K]
+        :return Rs: np.ndarray of size n_run; extracted planet radii of every run in [K]
+        :return Rs_sigma: np.ndarray of size n_run; uncertainties of the extracted planet radii of every run in [K]
         '''
 
         extracted_spectra = []
@@ -455,9 +478,9 @@ class ML_Extraction(ExtractionModule):
         Rs_sigma = []
 
 
-        for n in range(n_MC):
+        for n in range(n_run):
             if (plot == True):
-                print('MC run:', n)
+                print('run:', n)
 
             # Get the signals (with and without noise) for the specified constellation
             self.signals, self.ideal_signals = self.run_socket(s_name='instrument',
@@ -486,9 +509,10 @@ class ML_Extraction(ExtractionModule):
             # Create the transmission maps and the auxiliary matrices B&C
             if (self.ideal == True):
                 # define noise as an array with all ones (to be evaluated in an if-clause in self.get_B_C)
-                self.noise = np.ones_like(self.ideal_signals)
+                self.noise = np.zeros_like(self.ideal_signals)
 
                 self.cost_func(signals=self.ideal_signals, plot=plot)
+
             else:
                 # define noise as total signal minus planet signal
                 self.noise = self.signals - self.ideal_signals
@@ -505,7 +529,7 @@ class ML_Extraction(ExtractionModule):
             popt, pcov, perr = self.get_T_R_estimate(Fp_est, sigma_est, plot_flux=plot, plot_BB=plot,
                                                      plot_snr=plot)
 
-            # Add the quantities from this MC run to the final list
+            # Add the quantities from this run to the final list
             extracted_spectra.append(Fp_est)
             extracted_snrs.append(SNR_est)
             extracted_sigmas.append(sigma_est)
@@ -562,17 +586,17 @@ class ML_Extraction(ExtractionModule):
 
 
 
-    def main_parameter_extraction(self, n_MC=100, mu=0, plot=False, ideal=False, single_planet_mode=False, planet_number=0, save_mode=True, filepath=None):
+    def main_parameter_extraction(self, n_run=1, mu=0, plot=False, ideal=False, single_planet_mode=False, planet_number=0, save_mode=True, filepath=None):
         '''
         The main_parameter_extraction function is the function that should get called by other files. In defines all the
-        required parameters and then runs MC_spectrum_extraction for either one specified planet (single_planet_mode=True)
+        required parameters and then runs single_spectrum_extraction for either one specified planet (single_planet_mode=True)
         or for all of the planets in the catalog. In single_planet_mode=True, the extracted quantities are returned,
         if =False the catalog of the bus is directly adjusted and saved (provided save_mode=True) in path/changeme.csv
 
-        :param n_MC: integer; number of MC runs to perform for each planet
+        :param n_run: integer; number of runs to perform for each planet
         :param mu: float; regularization parameter for the calculation of the cost function J as described in section 3.1
                     of LIFE II []
-        :param plot: boolean; determines whether to show plots throughout the runs (only advised for small n_MC)
+        :param plot: boolean; determines whether to show plots throughout the runs (only advised for small n_run)
         :param ideal: boolean; if True, no noise is included in the extraction
         :param single_planet_mode: boolean; if True, signal extraction is performed for only one planet in the catalog
                     as defined by the following parameter
@@ -584,7 +608,7 @@ class ML_Extraction(ExtractionModule):
                     single_planet_mode=False)
 
         :return spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma; Only applicable if
-                    single_planet_mode=True, else nothing is returned. See MC_spectrum_extraction for description
+                    single_planet_mode=True, else nothing is returned. See single_spectrum_extraction for description
 
         Attributes
         -----------
@@ -600,7 +624,7 @@ class ML_Extraction(ExtractionModule):
         - 'hfov': np.ndarray of size L, consists of the half field of views of the instrument in each wavelength bin in [radians]
         - 'mu': float, regularization parameter for the calculation of the cost function J as described above []
         - 'planet_number': index of the planet in the catalog of the bus of which the signal is to be extracted []
-        - 'n_MC': number of MC runs to perform for each planet []
+        - 'n_run': number of runs to perform for each planet []
         - 'ideal': boolean; if True, no noise is included in the extraction []
 
         Two attributes concerning the angular dimensioning of the image:
@@ -629,20 +653,20 @@ class ML_Extraction(ExtractionModule):
         self.radial_ang_px = int(self.image_size / 2)
         self.hfov = self.data.inst['hfov']
         self.mu = mu
-        self.n_MC = n_MC
+        self.n_run = n_run
         self.ideal = ideal
 
         self.planet_azimuth = 0
         self.n_steps = 360
         self.hfov_cost = 0.4 / 3600 / 180 * np.pi
 
-        #if in single_planet_mode, define the planet-specific parameters, run MC_spectrum_extraction once and return the
-        # extracted parameters
+        #if in single_planet_mode, define the planet-specific parameters, run single_spectrum_extraction once and return
+        # the extracted parameters
         if (single_planet_mode==True):
             self.planet_number = planet_number
             self.single_data_row = self.data.catalog.iloc[planet_number]
 
-            spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma = self.MC_spectrum_extraction(n_MC=n_MC, plot=plot)
+            spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma = self.single_spectrum_extraction(n_run=n_run, plot=plot)
 
             return spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma
 
@@ -666,7 +690,7 @@ class ML_Extraction(ExtractionModule):
                 self.planet_number = i
                 self.single_data_row = self.data.catalog.iloc[i]
 
-                spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma = self.MC_spectrum_extraction(n_MC=self.n_MC, plot=plot)
+                spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma = self.single_spectrum_extraction(n_run=self.n_run, plot=plot)
 
                 #store the data in the lists
                 extracted_spectra.append(spectra.tolist())
