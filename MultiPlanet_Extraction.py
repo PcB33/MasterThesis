@@ -12,7 +12,7 @@ ex_bus = ls.Bus()
 ex_bus.data.options.set_scenario('baseline')
 
 #import catalog
-ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard500_scen1_spectrum.hdf5')
+ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard10_scen1_spectrum.hdf5')
 
 #add the instrument, transmission, extraction and noise modules and connect them
 instrument = ls.Instrument(name='inst')
@@ -48,7 +48,7 @@ instrument.apply_options()
 
 #define variables ------------------------------------------------------------------------------------------------------
 mu = 0
-
+n_processes = 4
 
 #define parameters with which to slice your dataset --------------------------------------------------------------------
 parameters = np.array([
@@ -74,5 +74,6 @@ for i in range(attributes.size):
 ex_bus.data.catalog = mask
 
 
-#Perform the extraction and save the file in /05_output_files/changeme.csv ---------------------------------------------
-extr.main_parameter_extraction(n_run=1, mu=mu, filepath=path+'05_output_files/')
+if __name__ == '__main__':
+    #Perform the extraction and save the file in /05_output_files/changeme.csv ---------------------------------------------
+    extr.main_parameter_extraction(n_run=1, mu=mu, n_processes=n_processes, filepath=path+'05_output_files/')

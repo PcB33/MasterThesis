@@ -127,7 +127,7 @@ ex_bus.data.catalog=pd.concat([first_row, ex_bus.data.catalog],ignore_index=True
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-planet_number = 2 #11 #24 #4 #2799 #17 #2
+planet_number = 1 #11 #24 #4 #2798 #17 #2
 n_run = 1
 mu=0
 angsep_accuracy_def = 0.15
