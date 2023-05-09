@@ -13,7 +13,7 @@ ex_bus.data.options.set_scenario('baseline')
 
 #import catalog
 #ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard10_scen1_spectrum.hdf5')
-ex_bus.data.import_catalog('standard10_scen1_spectrum.hdf5')
+ex_bus.data.import_catalog('/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/standard10_scen1_spectrum.hdf5')
 
 #add the instrument, transmission, extraction and noise modules and connect them
 instrument = ls.Instrument(name='inst')
