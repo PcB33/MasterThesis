@@ -78,4 +78,4 @@ ex_bus.data.catalog = mask
 if __name__ == '__main__':
     #Perform the extraction and save the file in /05_output_files/changeme.csv ---------------------------------------------
     #extr.main_parameter_extraction(n_run=1, mu=mu, n_processes=n_processes, filepath=path+'05_output_files/')
-    extr.main_parameter_extraction(n_run=1, mu=mu, n_processes=n_processes, filepath='')
+    extr.main_parameter_extraction(n_run=1, mu=mu, n_processes=n_processes, filepath='/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/')
