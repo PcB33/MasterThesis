@@ -7,7 +7,7 @@ import corner as corner
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-file = 'changeme.csv'
+file = 'rockyeHZ_multiextraction_scen1_100_radialpixel64.csv'
 angsep_accuracy_def = 0.15
 phi_accuracy_def = 10
 true_phi = 0
@@ -17,12 +17,17 @@ true_phi = 0
 extracted_data = pd.read_csv(path+'/05_output_files/multiextraction/'+file)
 n_planets = len(extracted_data.index)
 
+
 L = len(eval(extracted_data['extracted_spectra'][0])[0])
 eta_threshold_5 = get_detection_threshold(L, 5)
 
 
 position_fails = 0
 total_fails = 0
+success = 0
+jfails = 0
+rfails = 0
+angfails = 0
 
 SNR_ps_used = []
 SNR_ratios = []
@@ -49,10 +54,12 @@ for i in range(n_planets):
 
     if (jmax_i < eta_threshold_5):
         total_fails += 1
+        jfails += 1
 
     elif ((r_i > true_angsep*(1+angsep_accuracy_def)) or (r_i < true_angsep*(1-angsep_accuracy_def))):
         position_fails += 1
         total_fails += 1
+        rfails += 1
 
         #ToDo think about this (if you include them, T_mean fucks up)
         '''
@@ -66,6 +73,7 @@ for i in range(n_planets):
     elif ((np.abs(phi_i-true_phi)+phi_accuracy_def) % 360 > phi_accuracy_def+phi_accuracy_def):
         position_fails += 1
         total_fails += 1
+        angfails += 1
 
         '''
         SNR_ps_used.append(snr_ps)
@@ -81,7 +89,7 @@ for i in range(n_planets):
         Theta_ratios.append(r_i / true_angsep)
         T_ratios.append(T_i / true_T)
         R_ratios.append(R_i / true_R)
-
+        success +=1
 
 
 #calculate the means and stds and print the results --------------------------------------------------------------------
@@ -107,8 +115,14 @@ std_R_ratio = np.std(R_ratios)
 location_accuracy = (n_planets - position_fails)/n_planets
 total_accuracy = (n_planets - total_fails)/n_planets
 
+print('Total planets',n_planets)
+print('Successful extractions:',success)
+print('# failed detection limit',jfails)
+print('# failed angular separation',rfails)
+print('# failed phi',angfails)
+print('')
 
-print('Failed extractions: ',total_fails, ' => ',np.round(total_accuracy*100,2),'% success rate')
+print('Total failed extractions: ',total_fails, ' => ',np.round(total_accuracy*100,2),'% success rate')
 print('Excluding the failed extractions in the following')
 print('')
 print('Failed location estimates: ',position_fails,' => ',np.round(location_accuracy*100,2),'% success rate')
@@ -129,7 +143,8 @@ y_labels = ['# of planets per Universe', '# of planets per Universe', '# of plan
 x_lims = [[0,50], [140,310], [0.5,1.5], [0,100]]
 y_lims = [[0,6], [0,2.5], [0,2.2], [0,5.2]]
 
-n_universes = extracted_data['nuniverse'].max() + 1
+n_universes = extracted_data['nuniverse'].nunique()
+
 
 #create figure and fill plots by running through for loop for all list entries
 fig, axes = plt.subplots(len(variables), 1, figsize=(6.4,9.6),)
@@ -171,7 +186,7 @@ quantiles = [.159, .841]
 
 #define the main figure
 fig = plt.figure(figsize=(12, 12))
-fig = corner.corner(np.transpose(all_data), fig=fig, range=[(7, 30), (0.6, 1.4), (0.4, 1.6), (0.0, 2), (.88, 1.12)],
+fig = corner.corner(np.transpose(all_data), fig=fig, range=[(7, 30), (0.9, 1.1), (0.4, 1.6), (0.0, 2), (.88, 1.12)],
                     labels=labels, show_titles=True, hist_bin_factor=1.5, max_n_ticks=5,
                     plot_density=False, plot_contours=False, no_fill_contours=True, color='darkblue', quantiles=quantiles)
 
@@ -186,11 +201,11 @@ for i in range(len(fig.axes)):
         ax.set_xlim([7, 30])
 
     if i in [6, 11, 16, 21]:
-        ax.set_xticks([0.8, 1., 1.2])
-        ax.set_xlim([0.6, 1.4])
+        ax.set_xticks([0.95, 1., 1.05])
+        ax.set_xlim([0.9, 1.1])
     if i in [5]:
-        ax.set_yticks([0.8, 1., 1.2])
-        ax.set_ylim([0.6, 1.4])
+        ax.set_yticks([0.95, 1., 1.05])
+        ax.set_ylim([0.9, 1.1])
 
     if i in [12, 17, 22]:
         ax.set_xticks([0.5, 0.75, 1., 1.25, 1.5])

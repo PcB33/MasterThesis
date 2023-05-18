@@ -16,6 +16,7 @@ ex_bus.data.options.set_scenario('baseline')
 
 #import catalog
 ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard10_scen1_spectrum.hdf5')
+#ex_bus.data.import_catalog('/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/standard10_scen1_spectrum.hdf5')
 
 #add the instrument, transmission, extraction and noise modules and connect them
 instrument = ls.Instrument(name='inst')
@@ -127,7 +128,7 @@ ex_bus.data.catalog=pd.concat([first_row, ex_bus.data.catalog],ignore_index=True
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-planet_number = 1 #11 #24 #4 #2798 #17 #2
+planet_number = 2785 #2785 #11 #24 #4 #2798 #17 #2
 n_run = 1
 mu=0
 angsep_accuracy_def = 0.15
@@ -227,3 +228,23 @@ for j in range (len(rss)):
 print('Planet detected too close to star in ',too_close,' of ',len(rss),' cases')
 print('Planet detected too far from star in ',too_far,' of ',len(rss),' cases')
 print('')
+
+
+#ToDo remove
+
+#check get_snr
+mask = ex_bus.data.catalog.iloc[[planet_number]]
+ex_bus.data.catalog = mask
+
+instrument.get_snr(save_mode=False)
+print('snr_extracted:',snrs)
+
+
+from scipy.stats import norm
+
+SNR_ps = 10
+mean = 0
+std_noise = 1
+
+FPR = 1-norm.cdf(SNR_ps,mean,std_noise)
+print(FPR)
