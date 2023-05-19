@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import lifesim as ls
 from Extraction import ML_Extraction
+from Extraction_auxiliary import get_detection_threshold
 from auxiliary import path
 import statistics as st
 import scipy as sp
@@ -172,7 +173,7 @@ print('')
 
 
 #Get detection threshold and median/MAD of the extracted Jmaxs
-eta_threshold_5 = extr.get_detection_threshold(sigma=5)
+eta_threshold_5 = get_detection_threshold(L=extr.L,sigma=5)
 
 Jmax_median = st.median(Jmaxs)
 Jmax_MAD = sp.stats.median_abs_deviation(Jmaxs)

@@ -7,7 +7,7 @@ import corner as corner
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-file = 'rockyeHZ_multiextraction_scen1_100_FPR_new.csv'
+file = 'changeme.csv'
 angsep_accuracy_def = 0.15
 phi_accuracy_def = 10
 true_phi = 0

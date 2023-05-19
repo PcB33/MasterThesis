@@ -1,19 +1,15 @@
 import numpy as np
 import pandas as pd
-from auxiliary import pol_to_cart_map
-from lifesim.util.constants import c, h, k, radius_earth, m_per_pc
+from Extraction_auxiliary import pol_to_cart_map, plot_planet_SED_and_SNR, plot_multi_map
 from astropy import units as u
 import matplotlib.pyplot as plt
 import scipy as sp
-from scipy.special import factorial as fact
 from lifesim.util.radiation import black_body
-from plots import plot_planet_SED_and_SNR, plot_multi_map
 from lifesim.core.modules import ExtractionModule
+from lifesim.util.constants import c, h, k, radius_earth, m_per_pc
 from tqdm import tqdm
 import multiprocessing as multiprocessing
 import mpmath as mp
-
-#ToDo Question: Where should I put pol_to_cart_map, plot_planet_SED_and_SNR and plot_multi_map? Just in this class?
 
 
 class ML_Extraction(ExtractionModule):
@@ -94,8 +90,8 @@ class ML_Extraction(ExtractionModule):
         self.C = (C.T / var).T
 
         C_noise = np.concatenate((C_noise, -C_noise), axis=2)
-        self.C_noise = (C_noise.T / var_noise).T
-        self.C_noise1 = (C.T / var_noise).T
+        self.C_noise_only = (C_noise.T / var_noise).T
+        self.C_noise_var = (C.T / var_noise).T
 
 
         return
@@ -226,7 +222,7 @@ class ML_Extraction(ExtractionModule):
             F_pos = np.where(F >= 0, F, 0)
 
             ##Calculation of the estimated planet signal (no noise)
-            F_noise = self.C_noise / self.B_noise
+            F_noise = self.C_noise_only / self.B_noise
             F_noise_pos = np.where(F_noise >=0, F_noise, 0)
             F_white = F - F_noise
             F_white_pos = np.where(F_white >=0, F_white, 0)
@@ -250,16 +246,16 @@ class ML_Extraction(ExtractionModule):
 
                 # Calculate F and F_pos without and with noise
                 F = np.einsum("rlm,mrp ->lrp", Sinv, self.C)
-                F_noise = np.einsum("rlm,mrp ->lrp", Sinv_noise, self.C_noise)
+                F_noise = np.einsum("rlm,mrp ->lrp", Sinv_noise, self.C_noise_only)
 
                 F_pos = np.empty_like(F)
-                F_pos_noise = np.empty_like(F_noise)
+                F_noise_pos = np.empty_like(F_noise)
 
                 for r in range(n_r):  # r-range
                     for p in range(n_p):  # phi-range
                         # nnls: F = argmin_F(abs(S*F-C))
                         F_pos[:, r, p] = sp.optimize.nnls(S[r], self.C[:, r, p], maxiter=200)[0]
-                        F_pos_noise[:, r, p] = sp.optimize.nnls(S_noise[r], self.C_noise[:, r, p], maxiter=200)[0]
+                        F_noise_pos[:, r, p] = sp.optimize.nnls(S_noise[r], self.C_noise_only[:, r, p], maxiter=200)[0]
 
                 F_white = F - F_noise
                 F_white_pos = np.where(F_white >= 0, F_white, 0)
@@ -271,13 +267,34 @@ class ML_Extraction(ExtractionModule):
                 F = self.C / self.B
                 F_pos = np.where(F >= 0, F, 0)
 
-                F_noise = self.C_noise / self.B_noise
+                F_noise = self.C_noise_only / self.B_noise
                 F_white = F - F_noise
                 F_white_pos = np.where(F_white >= 0, F_white, 0)
 
-                #ToDo adjust description of function and add F_noise to mu!=0 case
 
         return F, F_pos, F_white, F_white_pos, F_noise, F_noise_pos
+
+
+    def pdf_J(self,J, delta):
+
+        fact = sp.special.factorial
+
+        pdf = 1 / 2 ** self.L * delta
+        for l in range(0, self.L):
+            pdf += fact(self.L) / (2 ** self.L * fact(l) * fact(self.L - l)) * sp.stats.chi2.pdf(J, self.L - l)
+
+        return pdf
+
+
+    def cdf_J(self,J, precision):
+
+        mp.mp.dps = precision
+
+        cdf = mp.power(mp.mp.mpf('0.5'), self.L)
+        for l in range(0, self.L):
+            cdf += mp.fac(self.L) / (mp.mp.power(mp.mp.mpf('2'), self.L) * mp.fac(l) * mp.fac(self.L - l)) * mp.gammainc((self.L - l) / 2, 0, J / 2, regularized=True)
+
+        return cdf
 
 
     def cost_func_MAP(self, mu=0, plot_maps=False):
@@ -305,8 +322,8 @@ class ML_Extraction(ExtractionModule):
 
         # Calculate the cost function and its maximum as well as the position of the maximum value of the cost function
         self.J = (F_pos * self.C).sum(axis=0)
-        self.J_noise = (F_noise_pos * self.C_noise).sum(axis=0)
-        self.J_FPR = (F_pos * self.C_noise1).sum(axis=0)
+        self.J_noise = (F_noise_pos * self.C_noise_only).sum(axis=0)
+        self.J_FPR = (F_pos * self.C_noise_var).sum(axis=0)
         Jmax = np.max(self.J)
         theta_max = np.unravel_index(np.argmax(self.J, axis=None), self.J.shape)
         (r, p) = theta_max
@@ -315,8 +332,6 @@ class ML_Extraction(ExtractionModule):
         #Calculate the estimated flux (with noise and without) at the position of Jmax (total and positive part)
         F_est = F[:, r, p]
         F_est_pos = F_pos[:, r, p]
-        F_signal_est = F_white[:, r, p]
-        F_signal_est_pos = F_white_pos[:, r, p]
 
 
         true_r = int(self.single_data_row['angsep'] / 2 / self.hfov_cost * self.image_size / 180 / 3600 * np.pi)
@@ -336,8 +351,9 @@ class ML_Extraction(ExtractionModule):
 
             #Break the loop if the precision goes to high to avoid too long runtimes. Set FPR_sigma to 100 in this case
             #   in order to remove the value during analysis
-            if (precision>=10000):
-                print('warning: FPR_sigma could not be calculated')
+            if (precision>self.precision_limit):
+                if (plot_maps==True):
+                    print('warning: FPR_sigma could not be calculated')
                 FPR_sigma = 10000
 
 
@@ -350,73 +366,46 @@ class ML_Extraction(ExtractionModule):
             sigma_est = self.B_noise[:, r, p] ** (-1 / 2)
 
 
-        #Plot the cost function map if applicable
         if (plot_maps == True):
+            # Plot the cost function map
             j_map = pol_to_cart_map(self.J, self.image_size)
             plot_multi_map(j_map, "Cost Value",
                            self.hfov_cost * 3600000 * 180 / np.pi, "inferno")
 
+
+            #Plot a histogramm of the values of J
             flat_J = self.J.flatten()
-            j_array = np.linspace(0,2*np.max(flat_J),100)
+            j_array = np.linspace(0, 2 * np.max(flat_J), 100)
+
             plt.hist(flat_J,j_array)
             plt.title('J with signal')
             plt.ylim((0,10))
             plt.axvline(x=65, color='red', linestyle='--')
             plt.show()
 
+            #Plot a histogramm of the values of J considering only the noisy part of the signal
             flat_J_noise = self.J_noise.flatten()
-
-            x = np.linspace(0, 2*np.max(flat_J_noise), int(10 ** 2))
+            j_array_noise = np.linspace(0, 2* np.max(flat_J_noise), int(10 ** 2))
 
             weights_noise = np.ones_like(flat_J_noise)/flat_J_noise.size
-            counts, bins, _ = plt.hist(flat_J_noise, x, weights=weights_noise)
+            counts, bins, _ = plt.hist(flat_J_noise, j_array_noise, weights=weights_noise)
 
-            #ToDo this is somehow not working
-            popt, _ = sp.optimize.curve_fit(self.pdf_J, x[:-1], counts, p0=1)
+            #ToDo question: somehow this isn't working..
+            popt, _ = sp.optimize.curve_fit(self.pdf_J, j_array_noise[:-1], counts, p0=1)
             delta_opt=popt[0]
-            delta0 = 0
 
-            pdf_Jprime = sp.stats.chi2.pdf(x,self.L)
-            pdf_J2prime = self.pdf_J(x,delta_opt)
-            pdf_delta0 = self.pdf_J(x,delta0)
+            pdf_Jprime = sp.stats.chi2.pdf(j_array_noise,self.L)
+            pdf_J2prime = self.pdf_J(j_array_noise,delta_opt)
 
-            plt.plot(x,pdf_Jprime,label='prime')
-            plt.plot(x,pdf_J2prime,label='2prime')
-            plt.plot(x,pdf_delta0,label='delta0')
+            plt.plot(j_array_noise,pdf_Jprime,label='J')
+            plt.plot(j_array_noise,pdf_J2prime,label='J''')
             plt.title('J only noise')
             plt.legend(loc='best')
-            #plt.ylim((0,10))
             plt.axvline(x=65, color='red', linestyle='--')
             plt.show()
 
 
         return Jmax, theta_max, F_est, F_est_pos, sigma_est, FPR_sigma
-
-
-    def get_detection_threshold(self, sigma):
-        '''
-        This function calculates the threshold above which one can be certain to 'sigma' sigmas that a detection is not
-        a false positive. See LIFE II section 3.2 for a detailed description
-
-        :param sigma: float; # of sigmas outside of which a false positive must lie []
-
-        :return: float; threshold is terms of the cost function J []
-        '''
-
-        #create the input linspace
-        eta = np.linspace(0, 300, int(10 ** 5))
-
-        cdf = 1 / 2 ** self.L
-
-        #calculate the cdf
-        for l in range(0, self.L):
-            cdf += fact(self.L) / (2 ** self.L * fact(l) * fact(self.L - l)) * sp.special.gammainc((self.L - l) / 2, eta / 2)
-
-        #find the threshold value eta
-        eta_ind_sigma = np.searchsorted(cdf, sp.stats.norm.cdf(sigma))
-        eta_threshold_sigma = eta[eta_ind_sigma]
-
-        return eta_threshold_sigma
 
 
     def BB_for_fit(self, wl, Tp, Rp):
@@ -445,7 +434,7 @@ class ML_Extraction(ExtractionModule):
 
 
     def get_T_R_estimate(self, spectra, sigmas, p0=(300, 1.), absolute_sigma=True, plot_flux=False,
-                         plot_BB=False, plot_snr=False):
+                         plot_BB=False):
         '''
         This function obtains the planet temperature and radius by fitting the input spectra and sigmas to blackbody curves
 
@@ -456,7 +445,6 @@ class ML_Extraction(ExtractionModule):
                     reflects these absolute values. If False, only the relative magnitudes of the sigma values matter
         :param plot_flux: boolean; determines whether to plot at all. If True, automatically plots the spectra
         :param plot_BB: boolean; determines whether to plot the fitted blackbody curve. Only applicable if plot_flux=True
-        :param plot_snr: boolean; determines whether to plot the SNR based on photon statistics for each wl-bin
 
         :return popt: np.ndarray of size 2; optimal values for (T,R) such that the sum of the squared residuals to the
                         blackbody curve is minimized. In [T,R_earth]
@@ -472,7 +460,7 @@ class ML_Extraction(ExtractionModule):
 
         perr = np.sqrt(np.diag(pcov))
 
-        # Plot the differnt quantities as defined
+        # Plot the different quantities as defined
         if (plot_flux == True):
             # Get the blackbody curve for the estimated parameters
             Fp_fit = self.BB_for_fit(self.wl_bins, popt[0], popt[1])
@@ -501,27 +489,6 @@ class ML_Extraction(ExtractionModule):
 
         return popt, pcov, perr
 
-
-    def pdf_J(self, J, delta):
-
-        fact = sp.special.factorial
-
-        pdf = 1 / 2 ** self.L * delta
-        for l in range(0, self.L):
-            pdf += fact(self.L) / (2 ** self.L * fact(l) * fact(self.L - l)) * sp.stats.chi2.pdf(J, self.L - l)
-
-        return pdf
-
-
-    def cdf_J(self,J, precision):
-
-        mp.mp.dps = precision
-
-        cdf = mp.power(mp.mp.mpf('0.5'), self.L)
-        for l in range(0, self.L):
-            cdf += mp.fac(self.L) / (mp.mp.power(mp.mp.mpf('2'), self.L) * mp.fac(l) * mp.fac(self.L - l)) * mp.gammainc((self.L - l) / 2, 0, J / 2, regularized=True)
-
-        return cdf
 
 
     def single_spectrum_extraction(self, n_run=1, plot=False):
@@ -581,6 +548,7 @@ class ML_Extraction(ExtractionModule):
                 print('run:', n)
 
             # Get the signals (with and without noise) for the specified constellation
+            #ToDo question: The noise/2...
             self.signals, self.ideal_signals = self.run_socket(s_name='instrument',
                                                                method='get_signal',
                                                                temp_s=self.single_data_row['temp_s'],
@@ -625,8 +593,7 @@ class ML_Extraction(ExtractionModule):
 
             # Calculate the best fit temperature and radius along with the corresponding uncertainties
             try:
-                popt, pcov, perr = self.get_T_R_estimate(Fp_est, sigma_est, plot_flux=plot, plot_BB=plot,
-                                                         plot_snr=plot)
+                popt, pcov, perr = self.get_T_R_estimate(Fp_est, sigma_est, plot_flux=plot, plot_BB=plot)
 
             except RuntimeError:
                 print('T and R not found')
@@ -638,7 +605,7 @@ class ML_Extraction(ExtractionModule):
             T_sigma = perr[0]
             R_sigma = perr[1]
 
-            #ToDo: You might want to remove this if it's unnecessary
+            #ToDo question: remove this SNR calculation?
             #Calculate the SNR
             if (self.ideal == True):
                 # SNR is not a well-defined quantity
@@ -745,7 +712,7 @@ class ML_Extraction(ExtractionModule):
 
 
 
-    def main_parameter_extraction(self, n_run=1, mu=0, n_processes = 1, plot=False, ideal=False, single_planet_mode=False, planet_number=0, save_mode=True, filepath=None):
+    def main_parameter_extraction(self, n_run=1, mu=0, n_processes = 1, precision_limit=3200, plot=False, ideal=False, single_planet_mode=False, planet_number=0, save_mode=True, filepath=None):
         '''
         The main_parameter_extraction function is the function that should get called by other files. In defines all the
         required parameters and then runs single_spectrum_extraction for either one specified planet (single_planet_mode=True)
@@ -815,6 +782,7 @@ class ML_Extraction(ExtractionModule):
         self.mu = mu
         self.n_run = n_run
         self.ideal = ideal
+        self.precision_limit = precision_limit
 
         self.planet_azimuth = 0
         self.n_steps = 360
