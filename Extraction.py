@@ -11,7 +11,7 @@ from plots import plot_planet_SED_and_SNR, plot_multi_map
 from lifesim.core.modules import ExtractionModule
 from tqdm import tqdm
 import multiprocessing as multiprocessing
-from decimal import Decimal, getcontext
+import mpmath as mp
 
 #ToDo Question: Where should I put pol_to_cart_map, plot_planet_SED_and_SNR and plot_multi_map? Just in this class?
 
@@ -95,6 +95,7 @@ class ML_Extraction(ExtractionModule):
 
         C_noise = np.concatenate((C_noise, -C_noise), axis=2)
         self.C_noise = (C_noise.T / var_noise).T
+        self.C_noise1 = (C.T / var_noise).T
 
 
         return
@@ -191,7 +192,7 @@ class ML_Extraction(ExtractionModule):
         return Dsqr_mat
 
 
-    def get_F_estimate(self, B, C, B_noise, C_noise, mu=0):
+    def get_F_estimate(self, mu=0):
         '''
         This function calculates the estimated flux received by the planet based on the matrices B and C which are
         given as input. See LIFE II Appendix B for an explanation of the calculations. The calculation is also done for
@@ -216,16 +217,16 @@ class ML_Extraction(ExtractionModule):
         '''
 
         # Get dimensions of the matrix
-        (n_l, n_r, n_p) = C.shape
+        (n_l, n_r, n_p) = self.C.shape
 
         # If there is no regularization, the calculation can be simplified
         if mu == 0:
             #Calculation of the total estimated signal (planet signal plus noise)
-            F = C / B
+            F = self.C / self.B
             F_pos = np.where(F >= 0, F, 0)
 
             ##Calculation of the estimated planet signal (no noise)
-            F_noise = C_noise / B_noise
+            F_noise = self.C_noise / self.B_noise
             F_noise_pos = np.where(F_noise >=0, F_noise, 0)
             F_white = F - F_noise
             F_white_pos = np.where(F_white >=0, F_white, 0)
@@ -237,7 +238,7 @@ class ML_Extraction(ExtractionModule):
                 Dsqr_mat = self.get_Dsqr_mat(n_l)
 
                 B_diags = np.array([np.diag(B[:, i, 0]) for i in range(n_r)])  # B is phi-independent
-                B_diags_noise = np.array([np.diag(B_noise[:, i, 0]) for i in range(n_r)])
+                B_diags_noise = np.array([np.diag(self.B_noise[:, i, 0]) for i in range(n_r)])
 
 
                 # Calculate the inverse of (B+mu*D^2)
@@ -248,8 +249,8 @@ class ML_Extraction(ExtractionModule):
                 Sinv_noise = np.linalg.inv(S_noise)
 
                 # Calculate F and F_pos without and with noise
-                F = np.einsum("rlm,mrp ->lrp", Sinv, C)
-                F_noise = np.einsum("rlm,mrp ->lrp", Sinv_noise, C_noise)
+                F = np.einsum("rlm,mrp ->lrp", Sinv, self.C)
+                F_noise = np.einsum("rlm,mrp ->lrp", Sinv_noise, self.C_noise)
 
                 F_pos = np.empty_like(F)
                 F_pos_noise = np.empty_like(F_noise)
@@ -257,8 +258,8 @@ class ML_Extraction(ExtractionModule):
                 for r in range(n_r):  # r-range
                     for p in range(n_p):  # phi-range
                         # nnls: F = argmin_F(abs(S*F-C))
-                        F_pos[:, r, p] = sp.optimize.nnls(S[r], C[:, r, p], maxiter=200)[0]
-                        F_pos_noise[:, r, p] = sp.optimize.nnls(S_noise[r], C_noise[:, r, p], maxiter=200)[0]
+                        F_pos[:, r, p] = sp.optimize.nnls(S[r], self.C[:, r, p], maxiter=200)[0]
+                        F_pos_noise[:, r, p] = sp.optimize.nnls(S_noise[r], self.C_noise[:, r, p], maxiter=200)[0]
 
                 F_white = F - F_noise
                 F_white_pos = np.where(F_white >= 0, F_white, 0)
@@ -267,10 +268,10 @@ class ML_Extraction(ExtractionModule):
             # print a corresponding warning
             except:
                 print('Warning: singular matrix obtained for this value of mu; F is calculated for mu=0')
-                F = C / B
+                F = self.C / self.B
                 F_pos = np.where(F >= 0, F, 0)
 
-                F_noise = C_noise / B_noise
+                F_noise = self.C_noise / self.B_noise
                 F_white = F - F_noise
                 F_white_pos = np.where(F_white >= 0, F_white, 0)
 
@@ -300,11 +301,12 @@ class ML_Extraction(ExtractionModule):
         '''
 
         #Calculate the estimated planet flux
-        F, F_pos, F_white, F_white_pos, F_noise, F_noise_pos = self.get_F_estimate(self.B, self.C, self.B_noise, self.C_noise, mu=mu)
+        F, F_pos, F_white, F_white_pos, F_noise, F_noise_pos = self.get_F_estimate(mu=mu)
 
         # Calculate the cost function and its maximum as well as the position of the maximum value of the cost function
         self.J = (F_pos * self.C).sum(axis=0)
         self.J_noise = (F_noise_pos * self.C_noise).sum(axis=0)
+        self.J_FPR = (F_pos * self.C_noise1).sum(axis=0)
         Jmax = np.max(self.J)
         theta_max = np.unravel_index(np.argmax(self.J, axis=None), self.J.shape)
         (r, p) = theta_max
@@ -320,27 +322,32 @@ class ML_Extraction(ExtractionModule):
         true_r = int(self.single_data_row['angsep'] / 2 / self.hfov_cost * self.image_size / 180 / 3600 * np.pi)
         true_phi = 0
 
-        J_true_pos = self.J[true_r, true_phi]
+        J_true_pos = self.J_FPR[true_r, true_phi]
 
-        FDR = self.cdf_J(J_true_pos)
-        FDR_sigma = sp.stats.norm.ppf(float(FDR))
-        print(FDR)
-        print(FDR_sigma)
+        precision=100
+        FPR_sigma = np.inf
+
+        while np.isinf(FPR_sigma):
+
+            FPR = self.cdf_J(J_true_pos,precision)
+            FPR_sigma = mp.mp.sqrt(2) * mp.erfinv(2*FPR-1)
+            FPR_sigma = float(FPR_sigma)
+            precision *= 2
+
+            #Break the loop if the precision goes to high to avoid too long runtimes. Set FPR_sigma to 100 in this case
+            #   in order to remove the value during analysis
+            if (precision>=10000):
+                print('warning: FPR_sigma could not be calculated')
+                FPR_sigma = 10000
+
 
         if (self.ideal == True):
-            #Sigma equal to zero leads to errors in the curve fitting; take very small value instead
-            sigma_est = np.ones_like(F_signal_est_pos) * 10 ** (-9)
-            #SNR is not a well-defined quantity
-            SNR_est = np.inf
-
+            # Sigma equal to zero leads to errors in the curve fitting; take very small value instead
+            sigma_est = np.ones((self.L)) * 10 ** (-9)
 
         else:
-            #Calculate sigma at the position of Jmax
+            # Calculate sigma at the position of Jmax
             sigma_est = self.B_noise[:, r, p] ** (-1 / 2)
-
-            #ToDo question: This is in a sense too good, because we don't actually know the ideal signal. This is true for the ps snr as well though
-            #Calculat the total SNR over all wavelength bins
-            SNR_est = np.sum((F_signal_est_pos / sigma_est) **2) ** (1 / 2)
 
 
         #Plot the cost function map if applicable
@@ -383,7 +390,7 @@ class ML_Extraction(ExtractionModule):
             plt.show()
 
 
-        return Jmax, theta_max, F_est, F_est_pos, sigma_est, SNR_est
+        return Jmax, theta_max, F_est, F_est_pos, sigma_est, FPR_sigma
 
 
     def get_detection_threshold(self, sigma):
@@ -498,24 +505,21 @@ class ML_Extraction(ExtractionModule):
     def pdf_J(self, J, delta):
 
         fact = sp.special.factorial
-        pdf = 1 / 2 ** self.L * delta
 
+        pdf = 1 / 2 ** self.L * delta
         for l in range(0, self.L):
             pdf += fact(self.L) / (2 ** self.L * fact(l) * fact(self.L - l)) * sp.stats.chi2.pdf(J, self.L - l)
 
         return pdf
 
 
-    def cdf_J(self, J):
+    def cdf_J(self,J, precision):
 
-        precision = 100
-        getcontext().prec = precision
+        mp.mp.dps = precision
 
-        cdf = 1/Decimal('2')**self.L
-
-        for l in range (0, self.L):
-            #ToDo why is there no /fact(self.L - l) here? (as in LIFE II equation 28)
-            cdf += Decimal(str(fact(self.L))) / Decimal(str((2**self.L * fact(l) * fact(self.L - l)))) * Decimal(str(sp.special.gammainc((self.L - l)/2, J / 2)))# / Decimal(str(fact(self.L - l)))
+        cdf = mp.power(mp.mp.mpf('0.5'), self.L)
+        for l in range(0, self.L):
+            cdf += mp.fac(self.L) / (mp.mp.power(mp.mp.mpf('2'), self.L) * mp.fac(l) * mp.fac(self.L - l)) * mp.gammainc((self.L - l) / 2, 0, J / 2, regularized=True)
 
         return cdf
 
@@ -569,6 +573,7 @@ class ML_Extraction(ExtractionModule):
         Ts_sigma = []
         Rs = []
         Rs_sigma = []
+        FPRs = []
 
 
         for n in range(n_run):
@@ -609,19 +614,11 @@ class ML_Extraction(ExtractionModule):
                 # define noise as total signal minus planet signal
                 self.noise = self.signals - self.ideal_signals
 
-
                 self.cost_func(signals=self.signals, plot=plot)
 
             # Get the extracted signals and cost function maxima
-            Jmax, theta_max, Fp_est, Fp_est_pos, sigma_est, SNR_est = self.cost_func_MAP(mu=self.mu, plot_maps=plot)
+            Jmax, theta_max, Fp_est, Fp_est_pos, sigma_est, FPR_extr = self.cost_func_MAP(mu=self.mu, plot_maps=plot)
 
-            print(sigma_est)
-            sigma_tot = np.sqrt((sigma_est**2).sum())
-            print(sigma_tot)
-            SNR_ps=self.single_data_row['snr_current']
-            print(SNR_ps)
-            FPR = 1-sp.stats.norm.cdf(SNR_ps,0,sigma_tot)
-            print('FPR',FPR)
 
             # Calculate the position of the maximum of the cost function
             (r, phi) = theta_max
@@ -636,6 +633,56 @@ class ML_Extraction(ExtractionModule):
                 popt = np.array([self.single_data_row['temp_p'], self.single_data_row['radius_p']])
                 perr = np.array([0.1,0.1])
 
+            T_est = popt[0]
+            R_est = popt[1]
+            T_sigma = perr[0]
+            R_sigma = perr[1]
+
+            #ToDo: You might want to remove this if it's unnecessary
+            #Calculate the SNR
+            if (self.ideal == True):
+                # SNR is not a well-defined quantity
+                SNR_est = np.inf
+
+
+            else:
+                # Calculate the blackbody flux of the planet according to the estimated parameters
+                est_flux = black_body(mode='planet',
+                                      bins=self.wl_bins,
+                                      width=self.wl_bin_widths,
+                                      temp=self.single_data_row['temp_p'],
+                                      radius=self.single_data_row['radius_p'],
+                                      distance=self.single_data_row['distance_s']
+                                      )
+
+
+                #Calculate the flux retrieved from the planet with the assumed parameters
+                _, self.est_ideal_signal = self.run_socket(s_name='instrument',
+                                                           method='get_signal',
+                                                           temp_s=self.single_data_row['temp_s'],
+                                                           radius_s=self.single_data_row['radius_s'],
+                                                           distance_s=self.single_data_row['distance_s'],
+                                                           lat_s=self.single_data_row['lat'],
+                                                           z=self.single_data_row['z'],
+                                                           angsep=2 * r * self.hfov_cost / self.image_size * 180 * 3600 / np.pi,
+                                                           flux_planet_spectrum=[self.wl_bins * u.meter,
+                                                                                 est_flux / self.wl_bin_widths * u.photon / u.second / ( u.meter ** 3)],
+                                                           integration_time=self.single_data_row['int_time'],
+                                                           phi_n=self.n_steps,
+                                                           extraction_mode=True)
+
+
+                #Recalculate the extracted signal according to the extracted parameters
+                self.noise = self.signals - self.est_ideal_signal
+                self.get_B_C(self.signals, self.tm_chop)
+                _, _, _, est_signal_pos, _, _ = self.get_F_estimate(mu=self.mu)
+
+                #Take the signal at the derived position
+                est_signal_pos = est_signal_pos[:,r,phi]
+
+                # Calculate the total SNR over all wavelength bins
+                SNR_est = np.sum((est_signal_pos / sigma_est) ** 2) ** (1 / 2)
+
 
             # Add the quantities from this run to the final list
             extracted_spectra.append(Fp_est)
@@ -646,10 +693,11 @@ class ML_Extraction(ExtractionModule):
             rss.append(2 * r * self.hfov_cost / self.image_size * 180 * 3600 / np.pi)
             phiss.append(phi * self.n_steps / 360)
 
-            Ts.append(popt[0])
-            Rs.append(popt[1])
-            Ts_sigma.append(perr[0])
-            Rs_sigma.append(perr[1])
+            Ts.append(T_est)
+            Rs.append(R_est)
+            Ts_sigma.append(T_sigma)
+            Rs_sigma.append(R_sigma)
+            FPRs.append(FPR_extr)
 
         # Convert the final lists to arrays
         extracted_spectra = np.array(extracted_spectra)
@@ -664,6 +712,7 @@ class ML_Extraction(ExtractionModule):
         Ts_sigma = np.array(Ts_sigma)
         Rs = np.array(Rs)
         Rs_sigma = np.array(Rs_sigma)
+        FPRs = np.array(FPRs)
 
 
         # Plot the extracted spectra and sigmas along with the true blackbody function
@@ -692,7 +741,7 @@ class ML_Extraction(ExtractionModule):
                                     self.max_wl, Fp_BB=Fp_BB,
                                     snr_photon_stat=snr_photon_stat)
 
-        return extracted_spectra, extracted_snrs, extracted_sigmas, extracted_Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma
+        return extracted_spectra, extracted_snrs, extracted_sigmas, extracted_Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs
 
 
 
@@ -777,9 +826,9 @@ class ML_Extraction(ExtractionModule):
             self.single_data_row = self.data.catalog.iloc[planet_number]
             self.hfov_cost = self.single_data_row['angsep'] * 1.2 / 3600 / 180 * np.pi
 
-            spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma = self.single_spectrum_extraction(n_run=n_run, plot=plot)
+            spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs = self.single_spectrum_extraction(n_run=n_run, plot=plot)
 
-            return spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma
+            return spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs
 
 
         #if single_planet_mode=False, proceed here
@@ -796,6 +845,7 @@ class ML_Extraction(ExtractionModule):
             extracted_Ts_sigma_tot = []
             extracted_Rs_tot = []
             extracted_Rs_sigma_tot = []
+            extracted_FPRs_tot = []
 
 
             # Divide the planets into equal ranges for parallel processing
@@ -860,6 +910,7 @@ class ML_Extraction(ExtractionModule):
                 extracted_Ts_sigma_tot.append(results[place_in_queue][7])
                 extracted_Rs_tot.append(results[place_in_queue][8])
                 extracted_Rs_sigma_tot.append(results[place_in_queue][9])
+                extracted_FPRs_tot.append(results[place_in_queue][10])
 
 
 
@@ -874,6 +925,7 @@ class ML_Extraction(ExtractionModule):
             self.data.catalog['extracted_Ts_sigma'] = sum(extracted_Ts_sigma_tot, [])
             self.data.catalog['extracted_Rs'] = sum(extracted_Rs_tot, [])
             self.data.catalog['extracted_Rs_sigma'] = sum(extracted_Rs_sigma_tot, [])
+            self.data.catalog['extracted_FPRs'] = sum(extracted_FPRs_tot, [])
 
             #save the catalog
             if (save_mode==True):
@@ -910,6 +962,7 @@ class ML_Extraction(ExtractionModule):
         extracted_Ts_sigma = []
         extracted_Rs = []
         extracted_Rs_sigma = []
+        extracted_FPRs = []
 
         print('Process #',n_process,' started')
 
@@ -920,7 +973,7 @@ class ML_Extraction(ExtractionModule):
             self.hfov_cost = self.single_data_row['angsep'] * 1.2 / 3600 / 180 * np.pi
 
             #Call the extraction function for a single planet
-            spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma = self.single_spectrum_extraction(
+            spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs = self.single_spectrum_extraction(
                 n_run=self.n_run, plot=False)
 
             #Store the data in the lists
@@ -934,10 +987,11 @@ class ML_Extraction(ExtractionModule):
             extracted_Ts_sigma.append(Ts_sigma.tolist())
             extracted_Rs.append(Rs.tolist())
             extracted_Rs_sigma.append(Rs_sigma.tolist())
+            extracted_FPRs.append(FPRs.tolist())
 
         #Add the process number and the results to the queue and set the event
         num.put(n_process)
-        res.put([extracted_spectra, extracted_snrs, extracted_sigmas, extracted_Jmaxs, extracted_rss, extracted_phiss, extracted_Ts, extracted_Ts_sigma, extracted_Rs, extracted_Rs_sigma])
+        res.put([extracted_spectra, extracted_snrs, extracted_sigmas, extracted_Jmaxs, extracted_rss, extracted_phiss, extracted_Ts, extracted_Ts_sigma, extracted_Rs, extracted_Rs_sigma, extracted_FPRs])
         event.set()
         print('Process #', n_process, ' finished')
 
