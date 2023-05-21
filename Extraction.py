@@ -93,7 +93,6 @@ class ML_Extraction(ExtractionModule):
         self.C_noise_only = (C_noise.T / var_noise).T
         self.C_noise_var = (C.T / var_noise).T
 
-
         return
 
 
@@ -271,7 +270,6 @@ class ML_Extraction(ExtractionModule):
                 F_white = F - F_noise
                 F_white_pos = np.where(F_white >= 0, F_white, 0)
 
-
         return F, F_pos, F_white, F_white_pos, F_noise, F_noise_pos
 
 
@@ -378,9 +376,10 @@ class ML_Extraction(ExtractionModule):
             j_array = np.linspace(0, 2 * np.max(flat_J), 100)
 
             plt.hist(flat_J,j_array)
-            plt.title('J with signal')
+            plt.title('J including signal')
             plt.ylim((0,10))
-            plt.axvline(x=65, color='red', linestyle='--')
+            plt.axvline(x=65, color='red', linestyle='--', label='det. thres.')
+            plt.legend(loc='best')
             plt.show()
 
             #Plot a histogramm of the values of J considering only the noisy part of the signal
@@ -390,18 +389,17 @@ class ML_Extraction(ExtractionModule):
             weights_noise = np.ones_like(flat_J_noise)/flat_J_noise.size
             counts, bins, _ = plt.hist(flat_J_noise, j_array_noise, weights=weights_noise)
 
-            #ToDo question: somehow this isn't working..
-            popt, _ = sp.optimize.curve_fit(self.pdf_J, j_array_noise[:-1], counts, p0=1)
-            delta_opt=popt[0]
+            #Delta must be =0 for the function to be normalized (pdf_J integrated =1)
+            delta=0
 
             pdf_Jprime = sp.stats.chi2.pdf(j_array_noise,self.L)
-            pdf_J2prime = self.pdf_J(j_array_noise,delta_opt)
+            pdf_J2prime = self.pdf_J(j_array_noise,delta)
 
-            plt.plot(j_array_noise,pdf_Jprime,label='J')
-            plt.plot(j_array_noise,pdf_J2prime,label='J''')
+            plt.plot(j_array_noise,pdf_Jprime,label='J\u2032')
+            plt.plot(j_array_noise,pdf_J2prime,label='J\u2032\u2032')
             plt.title('J only noise')
+            plt.axvline(x=65, color='red', linestyle='--', label='det. thres.')
             plt.legend(loc='best')
-            plt.axvline(x=65, color='red', linestyle='--')
             plt.show()
 
 
@@ -937,7 +935,6 @@ class ML_Extraction(ExtractionModule):
         #Loop through all of the planets in the process range
         for j in tqdm(process_range):
             self.single_data_row = self.data.catalog.iloc[j]
-            #ToDo check if this is feasable
             self.hfov_cost = self.single_data_row['angsep'] * 1.2 / 3600 / 180 * np.pi
 
             #Call the extraction function for a single planet

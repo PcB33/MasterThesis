@@ -7,7 +7,7 @@ import corner as corner
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-file = 'changeme.csv'
+file = 'rockyeHZ_multiextraction_scen1_100_prec10000.csv'
 angsep_accuracy_def = 0.15
 phi_accuracy_def = 10
 true_phi = 0
@@ -144,11 +144,11 @@ print('')
 #create histogram plots like figure 12 LIFE II -------------------------------------------------------------------------
 #lists with the variables to be shown as well as attributes
 variables = [extracted_data['snr_current'], extracted_data['temp_p'], extracted_data['radius_p'], extracted_data['angsep']*1000]
-number_bins = [200, 40, 40, 130]
+number_bins = [260, 40, 36, 180]
 x_labels = ['SNR$_\mathrm{pred}$', '$T_\mathrm{p}$ [K]', '$R_\mathrm{p}$ [$R_\oplus$]', '$\Theta_\mathrm{p}$ [mas]']
 y_labels = ['# of planets per Universe', '# of planets per Universe', '# of planets per Universe', '# of planets per Universe']
 x_lims = [[0,50], [140,310], [0.5,1.5], [0,100]]
-y_lims = [[0,6], [0,2.5], [0,2.2], [0,5.2]]
+y_lims = [[0,6], [0,2.5], [0,2.2], [0,5.4]]
 
 n_universes = extracted_data['nuniverse'].nunique()
 

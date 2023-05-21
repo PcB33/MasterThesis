@@ -2,7 +2,6 @@ import numpy as np
 import pandas as pd
 import lifesim as ls
 from Extraction import ML_Extraction
-from auxiliary import path
 import operator as op
 import random as ran
 
@@ -14,8 +13,8 @@ if __name__ == '__main__':
     ex_bus.data.options.set_scenario('baseline')
 
     #import catalog
-    ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard10_scen1_spectrum.hdf5')
-    #ex_bus.data.import_catalog('/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/standard500_scen2_spectrum.hdf5')
+    #ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard10_scen1_spectrum.hdf5')
+    ex_bus.data.import_catalog('/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/standard500_scen2_spectrum.hdf5')
 
     #add the instrument, transmission, extraction and noise modules and connect them
     instrument = ls.Instrument(name='inst')
@@ -51,8 +50,9 @@ if __name__ == '__main__':
 
     #define variables ------------------------------------------------------------------------------------------------------
     mu = 0
-    n_processes = 1
-    n_universes = 10
+    n_processes = 32
+    n_universes = 100
+    precision_limit = 3200
 
 
     #define parameters with which to slice your dataset --------------------------------------------------------------------
@@ -95,6 +95,5 @@ if __name__ == '__main__':
     ex_bus.data.catalog = mask
 
     #Perform the extraction and save the file in /05_output_files/changeme.csv ---------------------------------------------
-    #extr.main_parameter_extraction(n_run=1, mu=mu, filepath=path + '05_output_files/')
-    extr.main_parameter_extraction(n_run=1, mu=mu, n_processes=n_processes, filepath=path+'05_output_files/')
-    #extr.main_parameter_extraction(n_run=1, mu=mu, n_processes=n_processes, filepath='/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/')
+    #extr.main_parameter_extraction(n_run=1, mu=mu, n_processes=n_processes, precision_limit=precision_limit, filepath=path+'05_output_files/')
+    extr.main_parameter_extraction(n_run=1, mu=mu, n_processes=n_processes, precision_limit=precision_limit, filepath='/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/')
