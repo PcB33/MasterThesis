@@ -7,7 +7,7 @@ import corner as corner
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-file = 'rockyeHZ_multiextraction_scen1_100_prec10000.csv'
+file = 'run/subneptun_hot_multiextraction_scen2_100_prec3200.csv'
 angsep_accuracy_def = 0.15
 phi_accuracy_def = 10
 true_phi = 0
@@ -78,7 +78,7 @@ for i in range(n_planets):
         if (snrJ_i==10000):
             FPR_fails += 1
 
-            SNR_ratios_J.append(1)
+            SNR_ratios_J.append(0)
 
             if (snr_ps<=smallest_SNR_ps):
                 smallest_SNR_ps = snr_ps

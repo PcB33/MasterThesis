@@ -5,6 +5,7 @@ import scipy as sp
 from scipy.special import factorial as fact
 import matplotlib.ticker as mtick
 from mpl_toolkits.axes_grid1 import AxesGrid
+from matplotlib.ticker import FuncFormatter
 
 
 def get_detection_threshold(L, sigma):
@@ -12,9 +13,10 @@ def get_detection_threshold(L, sigma):
     This function calculates the threshold above which one can be certain to 'sigma' sigmas that a detection is not
     a false positive. See LIFE II section 3.2 for a detailed description
 
+    :param L: int; Number of wavelength bins as given by the wavelength range and the resolution parameter R []
     :param sigma: float; # of sigmas outside of which a false positive must lie []
 
-    :return: float; threshold is terms of the cost function J []
+    :return eta_threshold_sigma: float; threshold is terms of the cost function J []
     '''
 
     # create the input linspace
@@ -33,8 +35,15 @@ def get_detection_threshold(L, sigma):
     return eta_threshold_sigma
 
 
-# Transforms cartesian coordinates to polar coordinates
 def cartesian2polar_for_map(outcoords, inputshape):
+    '''
+    Transforms cartesian coordinates into polar coordinates (auxiliary function for pol_to_cart_map)
+
+    :param outcoords: Format of the output coordinates
+    :param inputshape: Shape of the input coordinates
+
+    :return (r,phi): tuple; indices r and phi of the output polar map
+    '''
 
     y, x = outcoords
     x = x - (inputshape[0] - 0.5)
@@ -47,8 +56,16 @@ def cartesian2polar_for_map(outcoords, inputshape):
     return (r, phi_index)
 
 
-# Produces a cartesian map from a given input image
 def pol_to_cart_map(image, image_size):
+    '''
+    Produces a cartesian map from a given input image
+
+    :param image: Input image
+    :param image_size: int; Size of the input image
+
+    :return cartesian map: transformed image in cartesian coordinates
+    '''
+
     # create new column at end (360 deg) with same values as first column (0 deg) to get complete image
     image_new = np.empty((image.shape[0], image.shape[1] + 1))
     image_new[:, :-1] = image
@@ -63,6 +80,20 @@ def pol_to_cart_map(image, image_size):
 # plot from the old lifesim (modules/plotting/plotter.py)
 def plot_planet_SED_and_SNR(wl_bins, Fp, Fp_est, sigma, wl_min, wl_max, Fp_BB=None, snr_photon_stat=None,
                             filename=None):
+    '''
+    Plots the true and extracted blackbody curves (from the old lifesim version: modules/plotting/plotter.py)
+
+    :param wl_bins: np.ndarray of size L, consists of all the wavelength bins (middle wavelength of each bin) in [m]
+    :param Fp: True blackbody curve of the planet [photons]
+    :param Fp_est: np.ndarray of size L, Extracted fluxes for each wl bin [photons]
+    :param sigma: np.ndarray of size L, Uncertainties of the extracted fluxes for each wl bin [photons]
+    :param wl_min: float, minimum wavelength captured by the instrument [m]
+    :param wl_max: float, maximum wavelength captured by the instrument [m]
+    :param Fp_BB: Fitted blackbody curve of the planet [photons]
+    :param snr_photon_stat: snr per wavelength bin as calculated using photon statistics; no longer calculated in the
+                new lifesim version (always set to 'None')
+    :param filename: str, name of the file if the plot should be saved. If 'None', no plot is saved
+    '''
 
     fig, ax = plt.subplots()
 
@@ -95,9 +126,23 @@ def plot_planet_SED_and_SNR(wl_bins, Fp, Fp_est, sigma, wl_min, wl_max, Fp_BB=No
 
     plt.show()
 
-# from modules/plotting/plotanalysis.py
+    return
+
+
 def plot_multi_map(maps, map_type, hfov_mas, colormap="inferno", vmin=None, vmax=None,
-                   show_detections=False, filename_post=None, canvas=False):
+                   show_detections=False, filename_post=None):
+    '''
+    Plots the cost function J'' for each of the pixels in the image (from the old lifesim version: modules/plotting/plotanalysis.py)
+    :param maps: np.ndarray; input map data
+    :param map_type: str or list of str; labels for the maps
+    :param hfov_mas: float; half field of view used to create the map
+    :param colormap: str; style of the colormap
+    :param vmin: float; minimum value of the colorbar to be shown
+    :param vmax: float; maximum value of the colorbar to be shown
+    :param show_detections: boolean; if True, mark the position of the detected planet in the plot
+    :param filename_post: str, name of the file if the plot should be saved. If 'None', no plot is saved
+    '''
+
     if len(np.shape(maps)) < 3:
         maps = [maps]
 
@@ -124,8 +169,11 @@ def plot_multi_map(maps, map_type, hfov_mas, colormap="inferno", vmin=None, vmax
     for ax in grid:
         im = ax.imshow(maps[i], cmap=colormap, origin="lower",
                        extent=[sf_mas, -sf_mas, -sf_mas, sf_mas], vmin=vmin, vmax=vmax)
-        ax.set_xticks([-sf_mas / 2, 0, sf_mas / 2])
-        ax.set_yticks([-sf_mas / 2, 0, sf_mas / 2])
+
+        ax.set_title('Heatmap of the Cost function J\u2032\u2032')
+
+        ax.set_xticks([-np.round(sf_mas / 2,0), 0, np.round(sf_mas / 2,0)])
+        ax.set_yticks([-np.round(sf_mas / 2, 0), 0, np.round(sf_mas / 2, 0)])
 
         ax.tick_params(pad=1)
         plt.setp(ax.get_yticklabels(), rotation=90, va='center')
@@ -144,9 +192,11 @@ def plot_multi_map(maps, map_type, hfov_mas, colormap="inferno", vmin=None, vmax
 
         sfmt = mtick.ScalarFormatter(useMathText=True)
         sfmt.set_powerlimits((-3, 3))
-        sfmt.set_scientific(True)
+        sfmt.set_scientific(False)
+
 
         cbar = grid.cbar_axes[i].colorbar(im, format=sfmt)
+
         if n > 1:
             if type(map_type) == list:
                 label = map_type[i]
@@ -171,10 +221,4 @@ def plot_multi_map(maps, map_type, hfov_mas, colormap="inferno", vmin=None, vmax
 
     plt.show()
 
-    if (canvas == True):
-        fig.canvas.draw()
-        image = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        image = image.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-        plt.close()
-
-        return image
+    return

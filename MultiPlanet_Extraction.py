@@ -6,13 +6,13 @@ import operator as op
 import random as ran
 
 if __name__ == '__main__':
-    #create bus ------------------------------------------------------------------------------------------------------------
+    #create bus --------------------------------------------------------------------------------------------------------
     ex_bus = ls.Bus()
 
     #set basic scenario
     ex_bus.data.options.set_scenario('baseline')
 
-    #import catalog
+    #import catalog (use first line for local, second line if run on bluesky)
     #ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard10_scen1_spectrum.hdf5')
     ex_bus.data.import_catalog('/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/standard500_scen2_spectrum.hdf5')
 
@@ -48,20 +48,20 @@ if __name__ == '__main__':
     instrument.apply_options()
 
 
-    #define variables ------------------------------------------------------------------------------------------------------
+    #define variables --------------------------------------------------------------------------------------------------
     mu = 0
     n_processes = 32
     n_universes = 100
     precision_limit = 3200
 
 
-    #define parameters with which to slice your dataset --------------------------------------------------------------------
+    #define parameters with which to slice your dataset ----------------------------------------------------------------
     parameters = np.array([
             ['detected', op.eq, 1],
-            ['radius_p', op.ge, 0.5],
-            ['radius_p', op.le, 1.5],
-            ['flux_p', op.ge, 0.32],
-            ['flux_p', op.le, 1.776],
+            ['radius_p', op.ge, 0.82],
+            ['radius_p', op.le, 1.4],
+            ['flux_p', op.ge, 0.365],
+            ['flux_p', op.le, 1.107],
     ])
 
     attributes = parameters.T[0]
@@ -74,7 +74,7 @@ if __name__ == '__main__':
     random_universes = ran.sample(range(total_universes), n_universes)
 
 
-    #create the mask containing only the datapoints as specified by the parameters -----------------------------------------
+    #create the mask containing only the datapoints as specified by the parameters -------------------------------------
     mask = ex_bus.data.catalog
 
     for i in range(attributes.size):
@@ -94,6 +94,6 @@ if __name__ == '__main__':
     #save the filtered catalog to the bus
     ex_bus.data.catalog = mask
 
-    #Perform the extraction and save the file in /05_output_files/changeme.csv ---------------------------------------------
+    #Perform the extraction and save the file as changeme.csv; use first line for local, secoind line for bluesky ------
     #extr.main_parameter_extraction(n_run=1, mu=mu, n_processes=n_processes, precision_limit=precision_limit, filepath=path+'05_output_files/')
     extr.main_parameter_extraction(n_run=1, mu=mu, n_processes=n_processes, precision_limit=precision_limit, filepath='/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/')

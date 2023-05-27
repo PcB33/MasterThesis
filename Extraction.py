@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from Extraction_auxiliary import pol_to_cart_map, plot_planet_SED_and_SNR, plot_multi_map
+from Extraction_auxiliary import pol_to_cart_map, plot_planet_SED_and_SNR, plot_multi_map, get_detection_threshold
 from astropy import units as u
 import matplotlib.pyplot as plt
 import scipy as sp
@@ -10,6 +10,7 @@ from lifesim.util.constants import c, h, k, radius_earth, m_per_pc
 from tqdm import tqdm
 import multiprocessing as multiprocessing
 import mpmath as mp
+from matplotlib.ticker import ScalarFormatter
 
 
 class ML_Extraction(ExtractionModule):
@@ -48,7 +49,9 @@ class ML_Extraction(ExtractionModule):
                 and the cost function as described in Appendix B of LIFE II []
         - B_noise: np.ndarray of shape (L,radial_ang_px,n_steps); like B, but only for the noise (no planet signal).
                 Used for the calculation of the signal to noise ratio in cost_func_MAP
-        - C_noise: np.ndarray of shape (L,radial_ang_px,n_steps); like C, but only for the noise (no planet signal).
+        - C_noise_only: np.ndarray of shape (L,radial_ang_px,n_steps); like C, but only for the noise (no planet signal).
+                Used for the calculation of the signal to noise ratio in cost_func_MAP
+        - C_noise_var: np.ndarray of shape (L,radial_ang_px,n_steps); like C, but takes the variance only of the noise.
                 Used for the calculation of the signal to noise ratio in cost_func_MAP
         '''
 
@@ -89,6 +92,7 @@ class ML_Extraction(ExtractionModule):
         C = np.concatenate((C, -C), axis=2)
         self.C = (C.T / var).T
 
+        # Calculate C_noise_only and C_noise_var; the latter used the normal signal while the first is a purely noisy signal
         C_noise = np.concatenate((C_noise, -C_noise), axis=2)
         self.C_noise_only = (C_noise.T / var_noise).T
         self.C_noise_var = (C.T / var_noise).T
@@ -146,19 +150,134 @@ class ML_Extraction(ExtractionModule):
                                               )
 
 
-        # Plot the resulting transmission map for the first wl bin
+        # If applicable, plot the resulting transmission map
         if (plot == True):
-            plt.contour(tm_chop[0, :, :])
-            plt.show()
+            self.plot_transmissionmap()
 
         # Normalize the transmission map to instrument performance (required for compatability with functions written for
         #   the old lifesim version
         self.tm_chop = tm_chop * self.single_data_row['int_time'] / self.n_steps * self.data.inst[
             'telescope_area'] * self.data.inst['eff_tot'] * self.wl_bin_widths[:, np.newaxis, np.newaxis] * 10 ** 6
 
-
         # Calculate the matrices B and C as well as B_noise and C_noise
         self.get_B_C(signals, self.tm_chop)
+
+        return
+
+
+    def plot_transmissionmap(self):
+        '''
+        This function plots the differential transmission maps generated at a suitable wavelength, in cartesian and
+        polar coordinates, as well as the modulated planet and total signal for one full rotation of the instrument
+        '''
+
+        #Define the plot resolution as well as the wl at which to show the plot (take the closest bin with hfov = 1.4*angsep of the planet)
+        resolution = 1000
+        wl_bin = min(range(len(self.hfov)),
+                     key=lambda i: abs(self.hfov[i] - 1.4 * self.single_data_row['angsep'] / 3600 / 180 * np.pi))
+        wl_bin = 22
+        wl_value = np.round(self.wl_bins[wl_bin] * 10 ** 6, 1)
+
+        #Define the cartesian and polar coordinates
+        x_lin = np.linspace(-1, 1, resolution, endpoint=False)
+        x_lin += 1 * 0.5 / resolution
+        x_mat = np.tile(x_lin, (resolution, 1))
+        y_mat = np.tile(x_lin, (resolution, 1)).T
+        x_mat_wl = np.zeros((self.L, resolution, resolution))
+        y_mat_wl = np.zeros((self.L, resolution, resolution))
+
+        phi_lin_plot = np.linspace(0, 2 * np.pi, self.n_steps, endpoint=False)
+        phi_mat_plot = np.tile(phi_lin_plot, (resolution, 1))
+        theta_lin_plot = np.linspace(0, 1, resolution, endpoint=False)
+        theta_lin_plot += 1 * 0.5 / resolution
+        theta_mat_plot = np.tile(theta_lin_plot, (self.n_steps, 1)).T
+        phi_mat_plot_wl = np.zeros((self.L, resolution, self.n_steps))
+        theta_mat_plot_wl = np.zeros((self.L, resolution, self.n_steps))
+
+        for i in range(self.L):
+            x_mat_wl[i, :, :] = x_mat * self.hfov[i]
+            y_mat_wl[i, :, :] = y_mat * self.hfov[i]
+            phi_mat_plot_wl[i, :, :] = phi_mat_plot
+            theta_mat_plot_wl[i, :, :] = theta_mat_plot * self.hfov[i]
+
+        d_alpha_plot = theta_mat_plot_wl * np.cos(phi_mat_plot_wl)
+        d_beta_plot = theta_mat_plot_wl * np.sin(phi_mat_plot_wl)
+
+        #Get the tranmission maps
+        _, _, _, _, tm_chop_plot_lin = self.run_socket(s_name='transmission',
+                                                       method='transmission_map',
+                                                       map_selection=['tm_chop'],
+                                                       direct_mode=True,
+                                                       d_alpha=x_mat_wl,
+                                                       d_beta=y_mat_wl,
+                                                       hfov=self.hfov_cost,
+                                                       image_size=self.image_size
+                                                       )
+
+        _, _, _, _, tm_chop_plot_pol = self.run_socket(s_name='transmission',
+                                                       method='transmission_map',
+                                                       map_selection=['tm_chop'],
+                                                       direct_mode=True,
+                                                       d_alpha=d_alpha_plot,
+                                                       d_beta=d_beta_plot,
+                                                       hfov=self.hfov_cost,
+                                                       image_size=self.image_size
+                                                       )
+
+        #Plot the linear map
+        X_lin = np.linspace(-self.hfov[wl_bin] * 3600000 * 180 / np.pi, self.hfov[wl_bin] * 3600000 * 180 / np.pi,
+                            resolution)
+        Y_lin = X_lin
+        levels = np.linspace(-1, 1, 100)
+        ticks = np.array([-1, -0.5, 0, 0.5, 1])
+        contour = plt.contourf(X_lin, Y_lin, tm_chop_plot_lin[wl_bin, :, :], cmap='cividis', levels=levels)
+        cbar = plt.colorbar(contour, ticks=ticks)
+        cbar.ax.set_ylabel('Transmission')
+        circle = plt.Circle((0, 0), radius=self.single_data_row['angsep'] * 1000, fill=False, color='black',
+                            linestyle='--', label='planet')
+        plt.scatter(0, 0, marker='*', color='white', label='star')
+        plt.gca().add_patch(circle)
+        plt.title('Linear differential transmission map ($\lambda$=' + str(wl_value) + '$\mu m$)')
+        plt.legend(loc='best')
+        plt.xlim((-self.single_data_row['angsep']*1000 * 1.5, self.single_data_row['angsep']*1000 * 1.5))
+        plt.ylim((-self.single_data_row['angsep']*1000 * 1.5, self.single_data_row['angsep']*1000 * 1.5))
+        plt.xlabel('$\Delta$RA [mas]')
+        plt.ylabel('$\Delta$Dec [mas]')
+        plt.show()
+
+        #Plot the cartesian map
+        X_pol = np.linspace(0, self.n_steps, self.n_steps)
+        Y_pol = np.linspace(0, self.hfov[wl_bin] * 3600000 * 180 / np.pi, resolution)
+        levels = np.linspace(-1, 1, 100)
+        col_ticks = np.array([-1, -0.5, 0, 0.5, 1])
+        x_ticks = np.array([0,90,180,270,360])
+        contour = plt.contourf(X_pol, Y_pol, tm_chop_plot_pol[wl_bin, :, :], cmap='cividis', levels=levels)
+        cbar = plt.colorbar(contour, ticks=col_ticks)
+        cbar.ax.set_ylabel('Transmission')
+        plt.title('Polar differential transmission map ($\lambda$=' + str(wl_value) + '$\mu m$)')
+        plt.hlines(self.single_data_row['angsep'] * 1000, xmin=0, xmax=360, linestyles='--', color='black',
+                   label='planet')
+        plt.legend(loc='best')
+        plt.ylim((0, self.single_data_row['angsep']*1000 * 1.5))
+        plt.xlabel('Rotation angle [$^{\circ}$]')
+        plt.ylabel('Angular separation $\Theta$ [mas]')
+        plt.xticks(x_ticks)
+        plt.show()
+
+        #Plot the modulated signal
+        plt.plot(X_pol, self.signals[wl_bin,:], label='total noisy signal', color='dodgerblue')
+        plt.plot(X_pol, self.ideal_signals[wl_bin, :], label='pure planet signal', color='black')
+        plt.title('Signal Modulation ($\lambda$=' + str(wl_value) + '$\mu m$)')
+        plt.xlabel('Rotation angle [$^{\circ}$]')
+        plt.ylabel('Amplitude [photons]')
+        plt.xticks(x_ticks)
+        plt.grid()
+        plt.xlim((0, self.n_steps))
+        formatter = ScalarFormatter(useMathText=True)
+        formatter.set_powerlimits((0, 2))
+        plt.gca().yaxis.set_major_formatter(formatter)
+        plt.legend(loc='best')
+        plt.show()
 
         return
 
@@ -209,6 +328,10 @@ class ML_Extraction(ExtractionModule):
                     wl bin at every pixel in the image in [photons]
         :return F_white_pos: np.ndarray of shape (L,radial_ang_px); positive part of estimated planet flux received
                     for each wl bin at every pixel in the image in [photons]
+        :return F_noise: np.ndarray of shape (L,radial_ang_px); estimated noise flux (no signal) received for each
+                    wl bin at every pixel in the image in [photons]
+        :return F_noise_pos: np.ndarray of shape (L,radial_ang_px); positive part of estimated noise flux received
+                    for each wl bin at every pixel in the image in [photons]
         '''
 
         # Get dimensions of the matrix
@@ -220,7 +343,7 @@ class ML_Extraction(ExtractionModule):
             F = self.C / self.B
             F_pos = np.where(F >= 0, F, 0)
 
-            ##Calculation of the estimated planet signal (no noise)
+            #Calculation of the estimated planet signal (no noise)
             F_noise = self.C_noise_only / self.B_noise
             F_noise_pos = np.where(F_noise >=0, F_noise, 0)
             F_white = F - F_noise
@@ -232,7 +355,7 @@ class ML_Extraction(ExtractionModule):
                 # Calculate D^2
                 Dsqr_mat = self.get_Dsqr_mat(n_l)
 
-                B_diags = np.array([np.diag(B[:, i, 0]) for i in range(n_r)])  # B is phi-independent
+                B_diags = np.array([np.diag(self.B[:, i, 0]) for i in range(n_r)])  # B is phi-independent
                 B_diags_noise = np.array([np.diag(self.B_noise[:, i, 0]) for i in range(n_r)])
 
 
@@ -260,7 +383,7 @@ class ML_Extraction(ExtractionModule):
                 F_white_pos = np.where(F_white >= 0, F_white, 0)
 
             # For some values of mu, (B+mu*D^2) can be singular. In this case, calculate F without regularization and
-            # print a corresponding warning
+            #   print a corresponding warning
             except:
                 print('Warning: singular matrix obtained for this value of mu; F is calculated for mu=0')
                 F = self.C / self.B
@@ -273,18 +396,36 @@ class ML_Extraction(ExtractionModule):
         return F, F_pos, F_white, F_white_pos, F_noise, F_noise_pos
 
 
-    def pdf_J(self,J, delta):
+    def pdf_J(self, J):
+        '''
+        This function calculates the probability density function for the cost function J'' as described in LIFE II
+        equation (30). Note that the dirac delta function is not implemented
+
+        :param J: float, value of the cost function []
+
+        :return pdf: Normalized probability density of sum of L bins of the chi-squared distribution
+        '''
 
         fact = sp.special.factorial
 
-        pdf = 1 / 2 ** self.L * delta
+        pdf = 0
         for l in range(0, self.L):
             pdf += fact(self.L) / (2 ** self.L * fact(l) * fact(self.L - l)) * sp.stats.chi2.pdf(J, self.L - l)
 
         return pdf
 
 
-    def cdf_J(self,J, precision):
+    def cdf_J(self, J, precision):
+        '''
+        This function calculates the cumulative density function for the cost function J'' as described in LIFE II
+        equation (31)
+
+        :param J: float, value of the cost function []
+        :param precision: int, determines how precise the calculations are performed (for high snr values, precisions of
+                    up to 10000 can be required for correct calculation)
+
+        :return cdf: Cumulative probability density of sum of L bins of the chi-squared distribution
+        '''
 
         mp.mp.dps = precision
 
@@ -293,6 +434,38 @@ class ML_Extraction(ExtractionModule):
             cdf += mp.fac(self.L) / (mp.mp.power(mp.mp.mpf('2'), self.L) * mp.fac(l) * mp.fac(self.L - l)) * mp.gammainc((self.L - l) / 2, 0, J / 2, regularized=True)
 
         return cdf
+
+
+    def cdf_Jmax(self, J, precision):
+
+        cdf_Jmax = self.cdf_J(J, precision)**(self.radial_ang_px**2)
+
+        return cdf_Jmax
+
+
+    def get_detection_threshold_max(self, L, sigma):
+        '''
+        This function calculates the threshold above which one can be certain to 'sigma' sigmas that a detection is not
+        a false positive. See LIFE II section 3.2 for a detailed description
+
+        :param L: int; Number of wavelength bins as given by the wavelength range and the resolution parameter R []
+        :param sigma: float; # of sigmas outside of which a false positive must lie []
+
+        :return eta_threshold_sigma: float; threshold is terms of the cost function J []
+        '''
+
+        # create the input linspace
+        eta = np.linspace(0, 200, int(10 ** 3))
+
+        cdf = np.empty_like(eta)
+        for i in range(eta.size):
+            cdf[i] = self.cdf_Jmax(eta[i], 100)
+
+        # find the threshold value eta
+        eta_ind_sigma = np.searchsorted(cdf, sp.stats.norm.cdf(sigma))
+        eta_threshold_sigma = eta[eta_ind_sigma]
+
+        return eta_threshold_sigma
 
 
     def cost_func_MAP(self, mu=0, plot_maps=False):
@@ -306,42 +479,48 @@ class ML_Extraction(ExtractionModule):
 
         :return Jmax: float; maximum cost function value (of all pixels) []
         :return theta_max: tuple; (r,phi) coordinates of the maximum cost function value in [radial pixel,azimuthal pixel]
-        :return Fp_est: np.ndarray of size L; contains the estimated planet flux received at every
+        :return F_est: np.ndarray of size L; contains the estimated planet flux received at every
                     wavelength at the theta_max pixel coordinates in [photons]
-        :return Fp_est_pos: np.ndarray of size L; contains the positive part of the estimated planet flux received
+        :return F_est_pos: np.ndarray of size L; contains the positive part of the estimated planet flux received
                     at every wavelength at the theta_max pixel coordinates in [photons]
         :return sigma_est: np.ndarray of size L; contains the sigmas for the extracted spectra per wavelength bin
                     in [photons]
-        :return SNR_est: float; contains the extracted snr over the entire wavelength range []
+        :return FPR_sigma: float; contains the extracted false positive detection rate (in terms of standard deviations)
+                    over the entire wavelength range []
         '''
 
-        #Calculate the estimated planet flux
+        #Calculate the estimated total/planet/noise flux
         F, F_pos, F_white, F_white_pos, F_noise, F_noise_pos = self.get_F_estimate(mu=mu)
 
         # Calculate the cost function and its maximum as well as the position of the maximum value of the cost function
         self.J = (F_pos * self.C).sum(axis=0)
         self.J_noise = (F_noise_pos * self.C_noise_only).sum(axis=0)
-        self.J_FPR = (F_pos * self.C_noise_var).sum(axis=0)
         Jmax = np.max(self.J)
         theta_max = np.unravel_index(np.argmax(self.J, axis=None), self.J.shape)
         (r, p) = theta_max
-
 
         #Calculate the estimated flux (with noise and without) at the position of Jmax (total and positive part)
         F_est = F[:, r, p]
         F_est_pos = F_pos[:, r, p]
 
 
+        #Calculate the cost function using the variance only of the noise
+        self.J_FPR = (F_pos * self.C_noise_var).sum(axis=0)
+
+        #Determine the true values of r and phi in order to caclulate the value of J at this pixel
         true_r = int(self.single_data_row['angsep'] / 2 / self.hfov_cost * self.image_size / 180 / 3600 * np.pi)
         true_phi = 0
 
         J_true_pos = self.J_FPR[true_r, true_phi]
 
+
+        #Set the precision to 100 and the false positive rate to inf to begin the loop
         precision=100
         FPR_sigma = np.inf
 
         while np.isinf(FPR_sigma):
-
+            #Calculate the false positive rate at the true planet position. If the calculation fails due to lack of
+            #   precision, double the precision and try again
             FPR = self.cdf_J(J_true_pos,precision)
             FPR_sigma = mp.mp.sqrt(2) * mp.erfinv(2*FPR-1)
             FPR_sigma = float(FPR_sigma)
@@ -389,16 +568,25 @@ class ML_Extraction(ExtractionModule):
             weights_noise = np.ones_like(flat_J_noise)/flat_J_noise.size
             counts, bins, _ = plt.hist(flat_J_noise, j_array_noise, weights=weights_noise)
 
-            #Delta must be =0 for the function to be normalized (pdf_J integrated =1)
-            delta=0
 
-            pdf_Jprime = sp.stats.chi2.pdf(j_array_noise,self.L)
-            pdf_J2prime = self.pdf_J(j_array_noise,delta)
+            #Calculate and plot the theoretical pdf and cdf of the J'' function
+            pdf_J2prime = self.pdf_J(j_array_noise)
+            cdf_J2prime = np.empty_like(j_array_noise)
+            cdf_Jmax = np.empty_like(j_array_noise)
+            for i in range(j_array_noise.size):
+                cdf_J2prime[i] = self.cdf_J(j_array_noise[i],100)
+                cdf_Jmax[i] = self.cdf_Jmax(j_array_noise[i],100)
 
-            plt.plot(j_array_noise,pdf_Jprime,label='J\u2032')
+            #thres = get_detection_threshold(self.L,5)
+            #max_thres = self.get_detection_threshold_max(self.L, 5)
+            #print('max thres:',max_thres)
+
             plt.plot(j_array_noise,pdf_J2prime,label='J\u2032\u2032')
+            plt.plot(j_array_noise, cdf_J2prime, label='J\u2032\u2032 cdf')
+            plt.plot(j_array_noise, cdf_Jmax, label='J\u2032\u2032 cdf max')
             plt.title('J only noise')
             plt.axvline(x=65, color='red', linestyle='--', label='det. thres.')
+            plt.axvline(x=90.5, color='black', linestyle='--', label='det. thres. max')
             plt.legend(loc='best')
             plt.show()
 
@@ -526,6 +714,8 @@ class ML_Extraction(ExtractionModule):
         :return Ts_sigma: np.ndarray of size n_run; uncertainties of the extracted planet temperatures of every run in [K]
         :return Rs: np.ndarray of size n_run; extracted planet radii of every run in [K]
         :return Rs_sigma: np.ndarray of size n_run; uncertainties of the extracted planet radii of every run in [K]
+        :return FPRs: np.ndarray of size n_run; contains the extracted false positive detection rate for the extracted
+                    planet for every run in [number of sigmas]
         '''
 
         extracted_spectra = []
@@ -546,7 +736,6 @@ class ML_Extraction(ExtractionModule):
                 print('run:', n)
 
             # Get the signals (with and without noise) for the specified constellation
-            #ToDo question: The noise/2...
             self.signals, self.ideal_signals = self.run_socket(s_name='instrument',
                                                                method='get_signal',
                                                                temp_s=self.single_data_row['temp_s'],
@@ -565,8 +754,7 @@ class ML_Extraction(ExtractionModule):
                                                                                          'eff_tot'] / self.wl_bin_widths * u.photon / u.second / (
                                                                                              u.meter ** 3)],
                                                                integration_time=self.single_data_row['int_time'],
-                                                               phi_n=self.n_steps,
-                                                               extraction_mode=True)
+                                                               phi_n=self.n_steps)
 
 
             # Create the transmission maps and the auxiliary matrices B&C
@@ -633,8 +821,7 @@ class ML_Extraction(ExtractionModule):
                                                            flux_planet_spectrum=[self.wl_bins * u.meter,
                                                                                  est_flux / self.wl_bin_widths * u.photon / u.second / ( u.meter ** 3)],
                                                            integration_time=self.single_data_row['int_time'],
-                                                           phi_n=self.n_steps,
-                                                           extraction_mode=True)
+                                                           phi_n=self.n_steps)
 
 
                 #Recalculate the extracted signal according to the extracted parameters
@@ -724,6 +911,8 @@ class ML_Extraction(ExtractionModule):
                     of LIFE II []
         :param n_processes: integer; number of processes to run in parallel for multi-planet extraction (ignored if
                     single_planet_mode=True)
+        :param precision_limit: integer; determines the maximum precision the calculation of the false positive rate
+                    will use before deeming that it is high enough and set to 10000
         :param plot: boolean; determines whether to show plots throughout the runs (only advised for small n_run)
         :param ideal: boolean; if True, no noise is included in the extraction
         :param single_planet_mode: boolean; if True, signal extraction is performed for only one planet in the catalog
@@ -741,10 +930,10 @@ class ML_Extraction(ExtractionModule):
         Attributes
         -----------
         Most of the attributes are simply abbreviations of the respective objects inherited from the bus. These are:
-        - 'n_planets': Number of planets in the catalog []
-        - 'L': Number of wavelength bins as given by the wavelength range and the resolution parameter R []
-        - 'min_wl': minimum wavelength captured by the instrument [m]
-        - 'max_wl': maximum wavelength captured by the instrument [m]
+        - 'n_planets': integer; Number of planets in the catalog []
+        - 'L': integer; Number of wavelength bins as given by the wavelength range and the resolution parameter R []
+        - 'min_wl': float; minimum wavelength captured by the instrument [m]
+        - 'max_wl': float; maximum wavelength captured by the instrument [m]
         - 'wl_bins': np.ndarray of size L, consists of all the wavelength bins (middle wavelength of each bin) in [m]
         - 'wl_bin_widths': np.ndarray of size L, consists of all the widths of the wavelength bins in [m]
         - 'image_size': integer, precision that the image can be resolved to in one dimension in [number of pixels]
@@ -753,8 +942,7 @@ class ML_Extraction(ExtractionModule):
         - 'mu': float, regularization parameter for the calculation of the cost function J as described above []
         - 'n_run': integer; number of runs to perform for each planet []
         - 'ideal': boolean; if True, no noise is included in the extraction []
-        - 'hfov_cost': float; Half field of view used for the calculation of the cost map. This must be chosen such that
-                            that all of the planets are inside it (here 0.4 arcsec) [radian]
+        - 'precision_limit': integer; maximum precision the calculation of the false positive rate
 
         Two attributes concerning the angular dimensioning of the image:
         - 'planet_azimuth': Angular position of the planet on the image. Contrary to the radial position, which is given by
@@ -766,6 +954,9 @@ class ML_Extraction(ExtractionModule):
 
         The following attribute is planet-specific and must be redefined for each new planet:
         - 'single_data_row': pd.series, catalog data from the bus corresponding to the planet described by planet_number
+        - 'hfov_cost': float; Half field of view used for the calculation of the cost map in [radian]. This value is set
+                            based upon the true value; in practise, a grid search will have to be performed to ensure
+                            that the value is greater than the actual separation and for optimal performance
         '''
 
         self.n_planets = len(self.data.catalog.index)
