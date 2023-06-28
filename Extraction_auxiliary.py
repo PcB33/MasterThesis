@@ -119,10 +119,11 @@ def plot_planet_SED_and_SNR(wl_bins, Fp, Fp_est, sigma, wl_min, wl_max, Fp_BB=No
     ax.set_xlim(wl_min * 10 ** 6, wl_max * 10 ** 6)
     ax.set_ylim(0, 1.6 * np.max(Fp))
     ax.grid()
+    ax.set_title('Blackbody curve fit')
     ax.legend(fontsize=10)
 
     if filename is not None:
-        plt.savefig("plots/analysis/" + filename + ".pdf", bbox_inches='tight')
+        plt.savefig("C:\\Users\\Philipp Binkert\\OneDrive\\ETH\\Master_Thesis\\06_plots\\" + filename + ".pdf", bbox_inches='tight')
 
     plt.show()
 

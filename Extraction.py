@@ -1,5 +1,8 @@
 import numpy as np
 import pandas as pd
+import scipy.special
+import time
+
 from Extraction_auxiliary import pol_to_cart_map, plot_planet_SED_and_SNR, plot_multi_map, get_detection_threshold
 from astropy import units as u
 import matplotlib.pyplot as plt
@@ -414,6 +417,21 @@ class ML_Extraction(ExtractionModule):
 
         return pdf
 
+    def cdf_J2(self, J, precision):
+
+        mp.mp.dps = precision
+
+        cdf =  mp.mp.mpf('1') - mp.power(mp.mp.mpf('0.5'), self.L)
+        #print(cdf)
+
+        #fact = sp.special.factorial
+
+        for l in range(0, self.L):
+            cdf -= mp.fac(self.L) / (mp.mp.power(mp.mp.mpf('2'), self.L) * mp.fac(l) * mp.fac(self.L - l)) * mp.gammainc((self.L - l) / 2, 0, J / 2, regularized=True)
+            #print('cdf:',cdf)
+
+        return cdf
+
 
     def cdf_J(self, J, precision):
         '''
@@ -430,9 +448,10 @@ class ML_Extraction(ExtractionModule):
         mp.mp.dps = precision
 
         cdf = mp.power(mp.mp.mpf('0.5'), self.L)
+        #print(cdf)
         for l in range(0, self.L):
             cdf += mp.fac(self.L) / (mp.mp.power(mp.mp.mpf('2'), self.L) * mp.fac(l) * mp.fac(self.L - l)) * mp.gammainc((self.L - l) / 2, 0, J / 2, regularized=True)
-
+            #print(l, cdf)
         return cdf
 
 
@@ -512,26 +531,54 @@ class ML_Extraction(ExtractionModule):
         true_phi = 0
 
         J_true_pos = self.J_FPR[true_r, true_phi]
+        J_max_pos = self.J_FPR[r, p]
 
 
         #Set the precision to 100 and the false positive rate to inf to begin the loop
         precision=100
         FPR_sigma = np.inf
+        FPR_max_sigma = np.inf
 
-        while np.isinf(FPR_sigma):
+        while np.any(np.isinf([FPR_sigma, FPR_max_sigma])):
             #Calculate the false positive rate at the true planet position. If the calculation fails due to lack of
             #   precision, double the precision and try again
+            t1 = time.time()
             FPR = self.cdf_J(J_true_pos,precision)
+            t2 = time.time()
+            t3=t2-t1
+            t7=time.time()
             FPR_sigma = mp.mp.sqrt(2) * mp.erfinv(2*FPR-1)
             FPR_sigma = float(FPR_sigma)
+            t8=time.time()
+            t9=t8-t7
+
+            #ToDo undo
+            t4=time.time()
+            FPR_special = self.cdf_J2(J_true_pos, precision)
+            t5=time.time()
+            t6=t5-t4
+            #FPR_max = self.cdf_Jmax(J_max_pos,precision)
+            #FPR_max_sigma = mp.mp.sqrt(2) * mp.erfinv(2*FPR_max-1)
+            #FPR_max_sigma = float(FPR_max_sigma)
+            FPR_max_sigma=10
+
             precision *= 2
 
-            #Break the loop if the precision goes to high to avoid too long runtimes. Set FPR_sigma to 100 in this case
+            #Break the loop if the precision goes to high to avoid too long runtimes. Set FPR_sigma to 10000 in this case
             #   in order to remove the value during analysis
             if (precision>self.precision_limit):
                 if (plot_maps==True):
                     print('warning: FPR_sigma could not be calculated')
                 FPR_sigma = 10000
+                FPR_max_sigma = 10000
+
+        print('final old:', FPR)
+        print('final new:', FPR_special)
+        print('sum:',FPR+FPR_special)
+        print(precision)
+        print('time old:',t3)
+        print('time new:',t6)
+        print('time sigma conversion:',t9)
 
 
         if (self.ideal == True):
@@ -544,8 +591,8 @@ class ML_Extraction(ExtractionModule):
 
 
         if (plot_maps == True):
-            # Plot the cost function map
-            j_map = pol_to_cart_map(self.J, self.image_size)
+            # Plot the cost function heatmap
+            j_map = pol_to_cart_map(self.J,self.image_size)
             plot_multi_map(j_map, "Cost Value",
                            self.hfov_cost * 3600000 * 180 / np.pi, "inferno")
 
@@ -591,7 +638,7 @@ class ML_Extraction(ExtractionModule):
             plt.show()
 
 
-        return Jmax, theta_max, F_est, F_est_pos, sigma_est, FPR_sigma
+        return Jmax, theta_max, F_est, F_est_pos, sigma_est, FPR_sigma, FPR_max_sigma
 
 
     def BB_for_fit(self, wl, Tp, Rp):
@@ -671,7 +718,7 @@ class ML_Extraction(ExtractionModule):
                             distance=self.single_data_row['distance_s']) / self.wl_bin_widths * 10 ** -6
 
             plot_planet_SED_and_SNR(self.wl_bins, Fp, spectra, sigmas, self.min_wl,
-                                    self.max_wl, Fp_BB=Fp_BB, snr_photon_stat=snr_photon_stat)
+                                    self.max_wl, Fp_BB=Fp_BB, snr_photon_stat=snr_photon_stat, filename=None)
 
         return popt, pcov, perr
 
@@ -715,7 +762,9 @@ class ML_Extraction(ExtractionModule):
         :return Rs: np.ndarray of size n_run; extracted planet radii of every run in [K]
         :return Rs_sigma: np.ndarray of size n_run; uncertainties of the extracted planet radii of every run in [K]
         :return FPRs: np.ndarray of size n_run; contains the extracted false positive detection rate for the extracted
-                    planet for every run in [number of sigmas]
+                    planet for every run in [number of sigmas] when taking the true position
+        :return FPR_maxs: np.ndarray of size n_run; contains the extracted false positive detection rate for the extracted
+                    planet for every run in [number of sigmas] when taking the maximum position
         '''
 
         extracted_spectra = []
@@ -729,6 +778,7 @@ class ML_Extraction(ExtractionModule):
         Rs = []
         Rs_sigma = []
         FPRs = []
+        FPR_maxs = []
 
 
         for n in range(n_run):
@@ -759,7 +809,7 @@ class ML_Extraction(ExtractionModule):
 
             # Create the transmission maps and the auxiliary matrices B&C
             if (self.ideal == True):
-                # define noise as an array with all ones (to be evaluated in an if-clause in self.get_B_C)
+                # define noise as an array with all zeros (to be evaluated in an if-clause in self.get_B_C)
                 self.noise = np.zeros_like(self.ideal_signals)
 
                 self.cost_func(signals=self.ideal_signals, plot=plot)
@@ -771,7 +821,7 @@ class ML_Extraction(ExtractionModule):
                 self.cost_func(signals=self.signals, plot=plot)
 
             # Get the extracted signals and cost function maxima
-            Jmax, theta_max, Fp_est, Fp_est_pos, sigma_est, FPR_extr = self.cost_func_MAP(mu=self.mu, plot_maps=plot)
+            Jmax, theta_max, Fp_est, Fp_est_pos, sigma_est, FPR_extr, FPR_max_extr = self.cost_func_MAP(mu=self.mu, plot_maps=plot)
 
 
             # Calculate the position of the maximum of the cost function
@@ -850,6 +900,7 @@ class ML_Extraction(ExtractionModule):
             Ts_sigma.append(T_sigma)
             Rs_sigma.append(R_sigma)
             FPRs.append(FPR_extr)
+            FPR_maxs.append(FPR_max_extr)
 
         # Convert the final lists to arrays
         extracted_spectra = np.array(extracted_spectra)
@@ -865,6 +916,7 @@ class ML_Extraction(ExtractionModule):
         Rs = np.array(Rs)
         Rs_sigma = np.array(Rs_sigma)
         FPRs = np.array(FPRs)
+        FPR_maxs = np.array(FPR_maxs)
 
 
         # Plot the extracted spectra and sigmas along with the true blackbody function
@@ -893,7 +945,7 @@ class ML_Extraction(ExtractionModule):
                                     self.max_wl, Fp_BB=Fp_BB,
                                     snr_photon_stat=snr_photon_stat)
 
-        return extracted_spectra, extracted_snrs, extracted_sigmas, extracted_Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs
+        return extracted_spectra, extracted_snrs, extracted_sigmas, extracted_Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs
 
 
 
@@ -983,9 +1035,9 @@ class ML_Extraction(ExtractionModule):
             self.single_data_row = self.data.catalog.iloc[planet_number]
             self.hfov_cost = self.single_data_row['angsep'] * 1.2 / 3600 / 180 * np.pi
 
-            spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs = self.single_spectrum_extraction(n_run=n_run, plot=plot)
+            spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs = self.single_spectrum_extraction(n_run=n_run, plot=plot)
 
-            return spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs
+            return spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs
 
 
         #if single_planet_mode=False, proceed here
@@ -1003,6 +1055,7 @@ class ML_Extraction(ExtractionModule):
             extracted_Rs_tot = []
             extracted_Rs_sigma_tot = []
             extracted_FPRs_tot = []
+            extracted_FPR_maxs_tot = []
 
 
             # Divide the planets into equal ranges for parallel processing
@@ -1068,6 +1121,7 @@ class ML_Extraction(ExtractionModule):
                 extracted_Rs_tot.append(results[place_in_queue][8])
                 extracted_Rs_sigma_tot.append(results[place_in_queue][9])
                 extracted_FPRs_tot.append(results[place_in_queue][10])
+                extracted_FPR_maxs_tot.append(results[place_in_queue][11])
 
 
 
@@ -1083,6 +1137,7 @@ class ML_Extraction(ExtractionModule):
             self.data.catalog['extracted_Rs'] = sum(extracted_Rs_tot, [])
             self.data.catalog['extracted_Rs_sigma'] = sum(extracted_Rs_sigma_tot, [])
             self.data.catalog['extracted_FPRs'] = sum(extracted_FPRs_tot, [])
+            self.data.catalog['extracted_FPR_maxs'] = sum(extracted_FPR_maxs_tot, [])
 
             #save the catalog
             if (save_mode==True):
@@ -1120,6 +1175,7 @@ class ML_Extraction(ExtractionModule):
         extracted_Rs = []
         extracted_Rs_sigma = []
         extracted_FPRs = []
+        extracted_FPR_maxs = []
 
         print('Process #',n_process,' started')
 
@@ -1129,7 +1185,7 @@ class ML_Extraction(ExtractionModule):
             self.hfov_cost = self.single_data_row['angsep'] * 1.2 / 3600 / 180 * np.pi
 
             #Call the extraction function for a single planet
-            spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs = self.single_spectrum_extraction(
+            spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs = self.single_spectrum_extraction(
                 n_run=self.n_run, plot=False)
 
             #Store the data in the lists
@@ -1144,10 +1200,11 @@ class ML_Extraction(ExtractionModule):
             extracted_Rs.append(Rs.tolist())
             extracted_Rs_sigma.append(Rs_sigma.tolist())
             extracted_FPRs.append(FPRs.tolist())
+            extracted_FPR_maxs.append(FPR_maxs.tolist())
 
         #Add the process number and the results to the queue and set the event
         num.put(n_process)
-        res.put([extracted_spectra, extracted_snrs, extracted_sigmas, extracted_Jmaxs, extracted_rss, extracted_phiss, extracted_Ts, extracted_Ts_sigma, extracted_Rs, extracted_Rs_sigma, extracted_FPRs])
+        res.put([extracted_spectra, extracted_snrs, extracted_sigmas, extracted_Jmaxs, extracted_rss, extracted_phiss, extracted_Ts, extracted_Ts_sigma, extracted_Rs, extracted_Rs_sigma, extracted_FPRs, extracted_FPR_maxs])
         event.set()
         print('Process #', n_process, ' finished')
 

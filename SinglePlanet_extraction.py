@@ -129,7 +129,7 @@ ex_bus.data.catalog=pd.concat([first_row, ex_bus.data.catalog],ignore_index=True
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-planet_number = 9 #5 #2785 #11 #24 #4 #2798 #17 #2
+planet_number = 2798 #5 #2785 #11 #24 #4 #2798 #17 #2
 n_runs = 1
 mu=0
 angsep_accuracy_def = 0.15
@@ -137,7 +137,7 @@ phi_accuracy_def = 10
 
 
 #Call the main_parameter_extraction function ---------------------------------------------------------------------------
-spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs = extr.main_parameter_extraction(n_run=n_runs, plot=True, ideal=False, mu=mu, single_planet_mode=True, planet_number=planet_number)
+spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs = extr.main_parameter_extraction(n_run=n_runs, plot=True, ideal=False, mu=mu, single_planet_mode=True, planet_number=planet_number)
 
 
 #Perform the data analysis ---------------------------------------------------------------------------------------------
@@ -165,10 +165,13 @@ mean_s = snrs.mean(axis=0)
 std_s = np.std(snrs)
 mean_FPR = FPRs.mean(axis=0)
 std_FPR = np.std(FPRs)
+mean_FPR_max = FPR_maxs.mean(axis=0)
+std_FPR_max = np.std(FPR_maxs)
 
 print('snr by photon count:',np.round(ex_bus.data.catalog['snr_current'][planet_number],5))
 print('snr_extracted:',np.round(mean_s,5),'+/-',np.round(std_s,5))
 print('FPR extracted:',np.round(mean_FPR,5),'+/-',np.round(std_FPR,5))
+print('FPR max extracted:', np.round(mean_FPR_max,5),'+/-',np.round(std_FPR_max,5))
 print('')
 
 

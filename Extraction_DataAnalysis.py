@@ -7,7 +7,7 @@ import corner as corner
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-file = 'run/subneptun_hot_multiextraction_scen2_100_prec3200.csv'
+file = 'run_2/EEC_multiextraction_scen2_100_prec3200.csv'
 angsep_accuracy_def = 0.15
 phi_accuracy_def = 10
 true_phi = 0
@@ -35,6 +35,7 @@ smallest_SNR_ps = 10000
 SNR_ps_used = []
 SNR_ratios = []
 SNR_ratios_J = []
+SNR_ratios_Jmax = []
 Theta_ratios = []
 T_ratios = []
 R_ratios = []
@@ -50,6 +51,7 @@ for i in range(n_planets):
 
     snr_i = eval(extracted_data['extracted_snrs'][i])[0]
     snrJ_i = eval(extracted_data['extracted_FPRs'][i])[0]
+    snrJmax_i = eval(extracted_data['extracted_FPR_maxs'][i])[0]
     r_i = eval(extracted_data['extracted_rss'][i])[0]
     phi_i = eval(extracted_data['extracted_phiss'][i])[0]
     T_i = eval(extracted_data['extracted_Ts'][i])[0]
@@ -79,12 +81,14 @@ for i in range(n_planets):
             FPR_fails += 1
 
             SNR_ratios_J.append(0)
+            SNR_ratios_Jmax.append(0)
 
             if (snr_ps<=smallest_SNR_ps):
                 smallest_SNR_ps = snr_ps
 
         else:
             SNR_ratios_J.append(snrJ_i / snr_ps)
+            SNR_ratios_Jmax.append(snrJmax_i / snr_ps)
 
         SNR_ps_used.append(snr_ps)
         SNR_ratios.append(snr_i / snr_ps)
@@ -97,9 +101,22 @@ for i in range(n_planets):
 SNR_ps_used = np.array(SNR_ps_used)
 SNR_ratios = np.array(SNR_ratios)
 SNR_ratios_J = np.array(SNR_ratios_J)
+SNR_ratios_Jmax = np.array(SNR_ratios_Jmax)
 Theta_ratios = np.array(Theta_ratios)
 T_ratios = np.array(T_ratios)
 R_ratios = np.array(R_ratios)
+
+#plot of true vs max FPRs
+plt.scatter(x=SNR_ratios_J*SNR_ps_used,y=SNR_ratios_Jmax*SNR_ps_used,color='black',marker='x',label='detected planets')
+plt.plot(np.linspace(0,90,100),np.linspace(0,90,100), color='blue',label='theoretical boundary')
+plt.title('Ratio of true position FPR to maximum position FPR')
+plt.xlabel('max FPR')
+plt.ylabel('true FPR')
+plt.xlim((0,15))
+plt.ylim((0,15))
+plt.legend(loc='best')
+plt.grid()
+plt.show()
 
 
 mean_SNR_ratio = SNR_ratios.mean()
@@ -168,6 +185,7 @@ for i in range(len(variables)):
     ax.grid()
 
 plt.tight_layout()
+#Uncomment the following line to save
 #plt.savefig(path+'/06_plots/distributionplot_changeme.png')
 plt.show()
 
@@ -176,7 +194,7 @@ plt.show()
 #stack the plot input data
 data_SNR_ps_used = SNR_ps_used
 data_SNR_ratios = SNR_ratios
-data_SNR_ratios_J = SNR_ratios_J
+data_SNR_ratios_J = SNR_ratios_Jmax
 data_T_ratios = T_ratios
 data_R_ratios = R_ratios
 data_Theta_ratios = Theta_ratios
@@ -239,5 +257,6 @@ for i in range(len(fig.axes)):
 
 
 fig.axes[0].plot(ax.get_xlim(), ax.get_ylim(), ls="--", c=".3")
+#Uncomment the following line to save
 #plt.savefig(path+'/06_plots/cornerplot_changeme.png')
 plt.show()
