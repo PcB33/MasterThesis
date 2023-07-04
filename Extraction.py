@@ -3,7 +3,7 @@ import pandas as pd
 import scipy.special
 import time
 
-from Extraction_auxiliary import pol_to_cart_map, plot_planet_SED_and_SNR, plot_multi_map, get_detection_threshold
+from Extraction_auxiliary import pol_to_cart_map, plot_planet_SED_and_SNR, plot_multi_map, get_detection_threshold, get_detection_threshold_max
 from astropy import units as u
 import matplotlib.pyplot as plt
 import scipy as sp
@@ -417,21 +417,6 @@ class ML_Extraction(ExtractionModule):
 
         return pdf
 
-    def cdf_J2(self, J, precision):
-
-        mp.mp.dps = precision
-
-        cdf =  mp.mp.mpf('1') - mp.power(mp.mp.mpf('0.5'), self.L)
-        #print(cdf)
-
-        #fact = sp.special.factorial
-
-        for l in range(0, self.L):
-            cdf -= mp.fac(self.L) / (mp.mp.power(mp.mp.mpf('2'), self.L) * mp.fac(l) * mp.fac(self.L - l)) * mp.gammainc((self.L - l) / 2, 0, J / 2, regularized=True)
-            #print('cdf:',cdf)
-
-        return cdf
-
 
     def cdf_J(self, J, precision):
         '''
@@ -448,10 +433,8 @@ class ML_Extraction(ExtractionModule):
         mp.mp.dps = precision
 
         cdf = mp.power(mp.mp.mpf('0.5'), self.L)
-        #print(cdf)
         for l in range(0, self.L):
             cdf += mp.fac(self.L) / (mp.mp.power(mp.mp.mpf('2'), self.L) * mp.fac(l) * mp.fac(self.L - l)) * mp.gammainc((self.L - l) / 2, 0, J / 2, regularized=True)
-            #print(l, cdf)
         return cdf
 
 
@@ -462,29 +445,21 @@ class ML_Extraction(ExtractionModule):
         return cdf_Jmax
 
 
-    def get_detection_threshold_max(self, L, sigma):
-        '''
-        This function calculates the threshold above which one can be certain to 'sigma' sigmas that a detection is not
-        a false positive. See LIFE II section 3.2 for a detailed description
+    def alt_sigma_calc(self,FPR):
 
-        :param L: int; Number of wavelength bins as given by the wavelength range and the resolution parameter R []
-        :param sigma: float; # of sigmas outside of which a false positive must lie []
+        try:
+            lookup_table = pd.read_csv(self.filepath+'prob2sigma_conversiontable_minimal.csv',dtype={'prob': str})
+        except FileNotFoundError:
+            lookup_table = pd.read_csv(self.filepath+'Auxiliary/'+'prob2sigma_conversiontable_minimal.csv', dtype={'prob': str})
 
-        :return eta_threshold_sigma: float; threshold is terms of the cost function J []
-        '''
+        mp_series = lookup_table['prob'].map(lambda x: mp.mpf(str(x)))
 
-        # create the input linspace
-        eta = np.linspace(0, 200, int(10 ** 3))
+        abs_diff = np.abs(mp_series - FPR)
+        min_index = np.argmin(abs_diff)
 
-        cdf = np.empty_like(eta)
-        for i in range(eta.size):
-            cdf[i] = self.cdf_Jmax(eta[i], 100)
+        sigma = lookup_table['sigma'][min_index]
 
-        # find the threshold value eta
-        eta_ind_sigma = np.searchsorted(cdf, sp.stats.norm.cdf(sigma))
-        eta_threshold_sigma = eta[eta_ind_sigma]
-
-        return eta_threshold_sigma
+        return sigma
 
 
     def cost_func_MAP(self, mu=0, plot_maps=False):
@@ -522,7 +497,6 @@ class ML_Extraction(ExtractionModule):
         F_est = F[:, r, p]
         F_est_pos = F_pos[:, r, p]
 
-
         #Calculate the cost function using the variance only of the noise
         self.J_FPR = (F_pos * self.C_noise_var).sum(axis=0)
 
@@ -533,52 +507,36 @@ class ML_Extraction(ExtractionModule):
         J_true_pos = self.J_FPR[true_r, true_phi]
         J_max_pos = self.J_FPR[r, p]
 
-
         #Set the precision to 100 and the false positive rate to inf to begin the loop
         precision=100
-        FPR_sigma = np.inf
-        FPR_max_sigma = np.inf
+        FPR = 1.0
+        FPR_max = 1.0
 
-        while np.any(np.isinf([FPR_sigma, FPR_max_sigma])):
+        while ((FPR == 1.0 or FPR_max == 1.0) and precision <= self.precision_limit):
             #Calculate the false positive rate at the true planet position. If the calculation fails due to lack of
             #   precision, double the precision and try again
-            t1 = time.time()
             FPR = self.cdf_J(J_true_pos,precision)
-            t2 = time.time()
-            t3=t2-t1
-            t7=time.time()
-            FPR_sigma = mp.mp.sqrt(2) * mp.erfinv(2*FPR-1)
-            FPR_sigma = float(FPR_sigma)
-            t8=time.time()
-            t9=t8-t7
-
-            #ToDo undo
-            t4=time.time()
-            FPR_special = self.cdf_J2(J_true_pos, precision)
-            t5=time.time()
-            t6=t5-t4
-            #FPR_max = self.cdf_Jmax(J_max_pos,precision)
-            #FPR_max_sigma = mp.mp.sqrt(2) * mp.erfinv(2*FPR_max-1)
-            #FPR_max_sigma = float(FPR_max_sigma)
-            FPR_max_sigma=10
+            FPR_max = self.cdf_Jmax(J_max_pos, precision)
 
             precision *= 2
 
-            #Break the loop if the precision goes to high to avoid too long runtimes. Set FPR_sigma to 10000 in this case
-            #   in order to remove the value during analysis
-            if (precision>self.precision_limit):
-                if (plot_maps==True):
-                    print('warning: FPR_sigma could not be calculated')
-                FPR_sigma = 10000
-                FPR_max_sigma = 10000
 
-        print('final old:', FPR)
-        print('final new:', FPR_special)
-        print('sum:',FPR+FPR_special)
-        print(precision)
-        print('time old:',t3)
-        print('time new:',t6)
-        print('time sigma conversion:',t9)
+        if (precision > self.precision_limit):
+            if (plot_maps == True):
+                print('warning: FPR_sigma could not be calculated')
+            FPR_sigma = 10000
+            FPR_max_sigma = 10000
+
+        elif (self.single_data_row['snr_current'] <= 20):
+            FPR_sigma = mp.mp.sqrt(2) * mp.erfinv(2 * FPR - 1)
+            FPR_sigma = float(FPR_sigma)
+
+            FPR_max_sigma = mp.mp.sqrt(2) * mp.erfinv(2 * FPR_max - 1)
+            FPR_max_sigma = float(FPR_max_sigma)
+
+        else:
+            FPR_sigma = self.alt_sigma_calc(FPR)
+            FPR_max_sigma = self.alt_sigma_calc(FPR_max)
 
 
         if (self.ideal == True):
@@ -597,24 +555,17 @@ class ML_Extraction(ExtractionModule):
                            self.hfov_cost * 3600000 * 180 / np.pi, "inferno")
 
 
-            #Plot a histogramm of the values of J
-            flat_J = self.J.flatten()
-            j_array = np.linspace(0, 2 * np.max(flat_J), 100)
-
-            plt.hist(flat_J,j_array)
-            plt.title('J including signal')
-            plt.ylim((0,10))
-            plt.axvline(x=65, color='red', linestyle='--', label='det. thres.')
-            plt.legend(loc='best')
-            plt.show()
-
             #Plot a histogramm of the values of J considering only the noisy part of the signal
+            flat_J = self.J.flatten()
+            j_array = np.linspace(0, 2*np.max(flat_J), 100)
+            weights_signal = np.ones_like(flat_J) / flat_J.size
+
             flat_J_noise = self.J_noise.flatten()
-            j_array_noise = np.linspace(0, 2* np.max(flat_J_noise), int(10 ** 2))
-
+            j_array_noise = np.linspace(0, 2*np.max(flat_J_noise), int(10 ** 2))
             weights_noise = np.ones_like(flat_J_noise)/flat_J_noise.size
-            counts, bins, _ = plt.hist(flat_J_noise, j_array_noise, weights=weights_noise)
 
+            eta_5 = get_detection_threshold(self.L, 5)
+            eta_max_5 = get_detection_threshold_max(self.L, 5, self.image_size / 2)
 
             #Calculate and plot the theoretical pdf and cdf of the J'' function
             pdf_J2prime = self.pdf_J(j_array_noise)
@@ -624,17 +575,48 @@ class ML_Extraction(ExtractionModule):
                 cdf_J2prime[i] = self.cdf_J(j_array_noise[i],100)
                 cdf_Jmax[i] = self.cdf_Jmax(j_array_noise[i],100)
 
-            #thres = get_detection_threshold(self.L,5)
-            #max_thres = self.get_detection_threshold_max(self.L, 5)
-            #print('max thres:',max_thres)
-
-            plt.plot(j_array_noise,pdf_J2prime,label='J\u2032\u2032')
-            plt.plot(j_array_noise, cdf_J2prime, label='J\u2032\u2032 cdf')
-            plt.plot(j_array_noise, cdf_Jmax, label='J\u2032\u2032 cdf max')
-            plt.title('J only noise')
-            plt.axvline(x=65, color='red', linestyle='--', label='det. thres.')
-            plt.axvline(x=90.5, color='black', linestyle='--', label='det. thres. max')
+            counts_noise, bins_noise, _ = plt.hist(flat_J_noise, j_array_noise, weights=weights_noise, label='measured J\u2032\u2032 values noise', color='darkblue', rwidth=0.75)
+            plt.plot(j_array_noise,pdf_J2prime,label='p(J\u2032\u2032) theoretical',color='maroon')
+            plt.title('J\u2032\u2032 pure noisy signal')
+            plt.axvline(x=eta_5, color='red', linestyle='--', label='det. thres.')
             plt.legend(loc='best')
+            plt.xlabel('Cost function J\u2032\u2032')
+            plt.ylabel('Normalized probability density')
+            plt.grid()
+            #Uncomment the following line to save plot
+            #plt.savefig(self.filepath+'J_plot1.pdf')
+            plt.show()
+
+            counts_noise, bins_noise, _ = plt.hist(flat_J_noise, j_array_noise, weights=weights_noise, label='measured J\u2032\u2032 values noise', color='darkblue', rwidth=0.75)
+            plt.plot(j_array_noise, pdf_J2prime, label='p(J\u2032\u2032) theoretical', color='maroon')
+            plt.plot(j_array_noise, cdf_J2prime, label=r'''$\Phi(J'')$''', color='red')
+            plt.plot(j_array_noise, cdf_Jmax, label=r'''$\Phi_{max}(J'')$''', color='black')
+            plt.title('J\u2032\u2032 pure noisy signal')
+            plt.axvline(x=eta_5, color='red', linestyle='--', label='det. thres.')
+            plt.axvline(x=eta_max_5, color='black', linestyle='--', label='det. thres. max')
+            plt.legend(loc='best')
+            plt.xlabel('Cost function J\u2032\u2032')
+            plt.ylabel('Normalized probability density')
+            plt.grid()
+            # Uncomment the following line to save plot
+            #plt.savefig(self.filepath+'J_plot2.pdf')
+            plt.show()
+
+
+            counts, bins, _ = plt.hist(flat_J, j_array, weights=weights_signal, label='measured J\u2032\u2032 values signal', color='gold', rwidth=0.75)
+            counts_noise, bins_noise, _ = plt.hist(flat_J_noise, j_array_noise, weights=weights_noise, label='measured J\u2032\u2032 values noise', color='darkblue', rwidth=0.75)
+            plt.plot(j_array_noise, pdf_J2prime, label='p(J\u2032\u2032) theoretical', color='maroon')
+            plt.title('J\u2032\u2032 signal including planet')
+            plt.axvline(x=eta_5, color='red', linestyle='--', label='det. thres.')
+            #plt.axvline(x=eta_max_5, color='black', linestyle='--', label='det. thres. max')
+            plt.legend(loc='best')
+            plt.xlabel('Cost function J\u2032\u2032')
+            plt.ylabel('Normalized probability density')
+            plt.grid()
+            plt.xlim((0,1.5*np.max(flat_J)))
+            plt.ylim((0,20*1/(self.image_size/2)**2))
+            # Uncomment the following line to save plot
+            #plt.savefig(self.filepath+'J_plot3.pdf')
             plt.show()
 
 
@@ -841,7 +823,6 @@ class ML_Extraction(ExtractionModule):
             T_sigma = perr[0]
             R_sigma = perr[1]
 
-            #ToDo question: remove this SNR calculation?
             #Calculate the SNR
             if (self.ideal == True):
                 # SNR is not a well-defined quantity
@@ -949,7 +930,7 @@ class ML_Extraction(ExtractionModule):
 
 
 
-    def main_parameter_extraction(self, n_run=1, mu=0, n_processes = 1, precision_limit=3200, plot=False, ideal=False, single_planet_mode=False, planet_number=0, save_mode=True, filepath=None):
+    def main_parameter_extraction(self, n_run=1, mu=0, n_processes = 1, precision_limit=1600, plot=False, ideal=False, single_planet_mode=False, planet_number=0, save_mode=True, filepath=None):
         '''
         The main_parameter_extraction function is the function that should get called by other files. In defines all the
         required parameters and then runs single_spectrum_extraction for either one specified planet (single_planet_mode=True)
@@ -1024,6 +1005,7 @@ class ML_Extraction(ExtractionModule):
         self.n_run = n_run
         self.ideal = ideal
         self.precision_limit = precision_limit
+        self.filepath = filepath
 
         self.planet_azimuth = 0
         self.n_steps = 360
@@ -1141,7 +1123,7 @@ class ML_Extraction(ExtractionModule):
 
             #save the catalog
             if (save_mode==True):
-                self.data.catalog.to_csv(filepath+'changeme.csv')
+                self.data.catalog.to_csv(self.filepath+'changeme.csv')
 
 
             print('main_parameter_extraction completed')

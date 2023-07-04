@@ -8,6 +8,31 @@ from mpl_toolkits.axes_grid1 import AxesGrid
 from matplotlib.ticker import FuncFormatter
 
 
+def cdf_J(L, J):
+    '''
+    This function calculates the cumulative density function for the cost function J'' as described in LIFE II
+    equation (31)
+
+    :param J: float, value of the cost function []
+
+    :return cdf: Cumulative probability density of sum of L bins of the chi-squared distribution
+    '''
+
+    fact = sp.special.factorial
+    cdf = 1 / 2 ** L
+    for l in range(0, L):
+        cdf += fact(L) / (2 ** L * fact(l) * fact(L - l)) * sp.special.gammainc((L - l) / 2, J / 2)
+
+    return cdf
+
+
+def cdf_Jmax(L, J, radial_ang_px):
+
+    cdf_Jmax = cdf_J(L, J)**(radial_ang_px**2)
+
+    return cdf_Jmax
+
+
 def get_detection_threshold(L, sigma):
     '''
     This function calculates the threshold above which one can be certain to 'sigma' sigmas that a detection is not
@@ -22,11 +47,32 @@ def get_detection_threshold(L, sigma):
     # create the input linspace
     eta = np.linspace(0, 300, int(10 ** 5))
 
-    cdf = 1 / 2 ** L
+    cdf = cdf_J(L, eta)
 
-    # calculate the cdf
-    for l in range(0, L):
-        cdf += fact(L) / (2 ** L * fact(l) * fact(L - l)) * sp.special.gammainc((L - l) / 2, eta / 2)
+    # find the threshold value eta
+    eta_ind_sigma = np.searchsorted(cdf, sp.stats.norm.cdf(sigma))
+    eta_threshold_sigma = eta[eta_ind_sigma]
+
+    return eta_threshold_sigma
+
+
+def get_detection_threshold_max(L, sigma, radial_ang_pix):
+    '''
+    This function calculates the threshold above which one can be certain to 'sigma' sigmas that a detection is not
+    a false positive. See LIFE II section 3.2 for a detailed description
+
+    :param L: int; Number of wavelength bins as given by the wavelength range and the resolution parameter R []
+    :param sigma: float; # of sigmas outside of which a false positive must lie []
+
+    :return eta_threshold_sigma: float; threshold is terms of the cost function J []
+    '''
+
+    # create the input linspace
+    eta = np.linspace(0, 200, int(10 ** 3))
+
+    cdf = np.empty_like(eta)
+    for i in range(eta.size):
+        cdf[i] = cdf_Jmax(L, eta[i], radial_ang_pix)
 
     # find the threshold value eta
     eta_ind_sigma = np.searchsorted(cdf, sp.stats.norm.cdf(sigma))
@@ -171,7 +217,7 @@ def plot_multi_map(maps, map_type, hfov_mas, colormap="inferno", vmin=None, vmax
         im = ax.imshow(maps[i], cmap=colormap, origin="lower",
                        extent=[sf_mas, -sf_mas, -sf_mas, sf_mas], vmin=vmin, vmax=vmax)
 
-        ax.set_title('Heatmap of the Cost function J\u2032\u2032')
+        ax.set_title('Heatmap of the Cost function J\u2032\u2032 (image size = 256)')
 
         ax.set_xticks([-np.round(sf_mas / 2,0), 0, np.round(sf_mas / 2,0)])
         ax.set_yticks([-np.round(sf_mas / 2, 0), 0, np.round(sf_mas / 2, 0)])

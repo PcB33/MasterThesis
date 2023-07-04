@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import lifesim as ls
 from Extraction import ML_Extraction
-from Extraction_auxiliary import get_detection_threshold
+from Extraction_auxiliary import get_detection_threshold, get_detection_threshold_max
 from auxiliary import path
 import statistics as st
 import scipy as sp
@@ -17,7 +17,6 @@ ex_bus.data.options.set_scenario('baseline')
 
 #import catalog
 ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard10_scen1_spectrum.hdf5')
-#ex_bus.data.import_catalog('/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/standard10_scen1_spectrum.hdf5')
 
 #add the instrument, transmission, extraction and noise modules and connect them
 instrument = ls.Instrument(name='inst')
@@ -129,7 +128,7 @@ ex_bus.data.catalog=pd.concat([first_row, ex_bus.data.catalog],ignore_index=True
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-planet_number = 2798 #5 #2785 #11 #24 #4 #2798 #17 #2
+planet_number = 2798 #118 #5 #2785 #11 #24 #4 #2798 #17 #2
 n_runs = 1
 mu=0
 angsep_accuracy_def = 0.15
@@ -137,7 +136,7 @@ phi_accuracy_def = 10
 
 
 #Call the main_parameter_extraction function ---------------------------------------------------------------------------
-spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs = extr.main_parameter_extraction(n_run=n_runs, plot=True, ideal=False, mu=mu, single_planet_mode=True, planet_number=planet_number)
+spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs = extr.main_parameter_extraction(n_run=n_runs, plot=True, ideal=False, mu=mu, single_planet_mode=True, planet_number=planet_number, filepath=path+'05_output_files/')
 
 
 #Perform the data analysis ---------------------------------------------------------------------------------------------
@@ -177,11 +176,13 @@ print('')
 
 #Get detection threshold and median/MAD of the extracted Jmaxs
 eta_threshold_5 = get_detection_threshold(L=extr.L,sigma=5)
+eta_max_threshold_5 = get_detection_threshold_max(L=extr.L, sigma=5, radial_ang_pix=extr.image_size/2)
 
 Jmax_median = st.median(Jmaxs)
 Jmax_MAD = sp.stats.median_abs_deviation(Jmaxs)
 
-print('Detection threshold eta (5 sigma) = ',np.round(eta_threshold_5,0))
+print('Detection threshold eta (5 sigma) = ',np.round(eta_threshold_5,1))
+print('Detection threshold eta_max (5 sigma) = ',np.round(eta_max_threshold_5,1))
 print('Median maximum of cost function J:',np.round(Jmax_median,0),'+/-',np.round(Jmax_MAD,0))
 print('')
 

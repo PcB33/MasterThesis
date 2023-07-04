@@ -4,8 +4,16 @@ import lifesim as ls
 from Extraction import ML_Extraction
 import operator as op
 import random as ran
+import warnings
 
 if __name__ == '__main__':
+
+    #Define whether you are running the file locally or on the server (to define the correct paths)
+    local = False
+
+    #Suppress warnings
+    warnings.filterwarnings("ignore", category=UserWarning)
+
     #create bus --------------------------------------------------------------------------------------------------------
     ex_bus = ls.Bus()
 
@@ -13,8 +21,11 @@ if __name__ == '__main__':
     ex_bus.data.options.set_scenario('baseline')
 
     #import catalog (use first line for local, second line if run on bluesky)
-    #ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard10_scen1_spectrum.hdf5')
-    ex_bus.data.import_catalog('/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/standard500_scen2_spectrum.hdf5')
+    if (local == True):
+        path = 'C:/Users/Philipp Binkert/OneDrive/ETH/Master_Thesis/'
+        ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard10_scen1_spectrum.hdf5')
+    else:
+        ex_bus.data.import_catalog('/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/standard500_scen2_spectrum.hdf5')
 
     #add the instrument, transmission, extraction and noise modules and connect them
     instrument = ls.Instrument(name='inst')
@@ -52,16 +63,17 @@ if __name__ == '__main__':
     mu = 0
     n_processes = 32
     n_universes = 100
-    precision_limit = 3200
+    precision_limit = 1600
 
 
     #define parameters with which to slice your dataset ----------------------------------------------------------------
     parameters = np.array([
-            ['detected', op.eq, 1],
-            ['radius_p', op.ge, 0.82],
-            ['radius_p', op.le, 1.4],
-            ['flux_p', op.ge, 0.365],
-            ['flux_p', op.le, 1.107],
+            #['detected', op.eq, 1],
+            ['snr_current', op.ge, 0.5],
+            ['radius_p', op.ge, 1.0],
+            ['radius_p', op.le, 1.2],
+            ['flux_p', op.ge, 0.5],
+            ['flux_p', op.le, 1.1],
     ])
 
     attributes = parameters.T[0]
@@ -94,6 +106,8 @@ if __name__ == '__main__':
     #save the filtered catalog to the bus
     ex_bus.data.catalog = mask
 
-    #Perform the extraction and save the file as changeme.csv; use first line for local, secoind line for bluesky ------
-    #extr.main_parameter_extraction(n_run=1, mu=mu, n_processes=n_processes, precision_limit=precision_limit, filepath=path+'05_output_files/')
-    extr.main_parameter_extraction(n_run=1, mu=mu, n_processes=n_processes, precision_limit=precision_limit, filepath='/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/')
+    #Perform the extraction and save the file as changeme.csv ---------------------------------------------------------
+    if (local == True):
+        extr.main_parameter_extraction(n_run=1, mu=mu, n_processes=n_processes, precision_limit=precision_limit, filepath=path+'05_output_files/')
+    else:
+        extr.main_parameter_extraction(n_run=1, mu=mu, n_processes=n_processes, precision_limit=precision_limit, filepath='/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/')
