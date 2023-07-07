@@ -7,11 +7,11 @@ import corner as corner
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-file = 'randomsample_all.csv'
+file = 'randomsample_all_version2.csv'
 angsep_accuracy_def = 1000#0.15
 phi_accuracy_def = 1000#10
 true_phi = 0
-#Define according to what SNR method th filter for detected should be made (== 1, 2, 3)
+#Define according to what SNR method to filter for detected should be made (== 1, 2, 3); this SNR is also used in the corner plot
 defining_criteria = 2
 
 
@@ -183,12 +183,12 @@ plt.plot(np.linspace(0,200,100),np.linspace(0,200,100), color='blue',label='theo
 plt.title('Ratio of photon statistics SNR to true position SNR')
 plt.xlabel('true position SNR ')
 plt.ylabel('photon statistics SNR')
-plt.xlim((0,15))
-plt.ylim((0,15))
+plt.xlim((30,45))
+plt.ylim((30,45))
 plt.legend(loc='best')
 plt.grid()
 #Uncomment the following line to save
-#plt.savefig(path+'/06_plots/SNR_ps_to_SNR_2_changeme.pdf')
+plt.savefig(path+'/06_plots/SNR_ps_to_SNR_2_changeme.pdf')
 plt.show()
 
 #Compare SNR_ps to SNR_3
@@ -262,8 +262,15 @@ data_T_ratios = T_ratios
 data_R_ratios = R_ratios
 data_Theta_ratios = Theta_ratios
 
+if (defining_criteria==1):
+    data_SNR_ratios_used = data_SNR_ratios_1
+elif (defining_criteria==2):
+    data_SNR_ratios_used = data_SNR_ratios_2
+elif (defining_criteria==3):
+    data_SNR_ratios_used = data_SNR_ratios_3
+
 #Define the parameters you want to compare in the cornerplot here
-all_data = np.vstack([data_SNR_ps_used, data_SNR_ratios_3, data_T_ratios, data_R_ratios, data_Theta_ratios])
+all_data = np.vstack([data_SNR_ps_used, data_SNR_ratios_used, data_T_ratios, data_R_ratios, data_Theta_ratios])
 
 #define labels and quantiles
 labels = ['SNR$_\mathrm{ps}$',

@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 import lifesim as ls
 from Extraction import ML_Extraction
 import operator as op
@@ -68,12 +67,11 @@ if __name__ == '__main__':
 
     #define parameters with which to slice your dataset ----------------------------------------------------------------
     parameters = np.array([
-            #['detected', op.eq, 1],
-            ['snr_current', op.ge, 0.5],
-            ['radius_p', op.ge, 1.0],
-            ['radius_p', op.le, 1.2],
-            ['flux_p', op.ge, 0.5],
-            ['flux_p', op.le, 1.1],
+            ['detected', op.eq, 1],
+            ['radius_p', op.ge, 0.82],
+            ['radius_p', op.le, 1.4],
+            ['flux_p', op.ge, 0.356],
+            ['flux_p', op.le, 1.107],
     ])
 
     attributes = parameters.T[0]
