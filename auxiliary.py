@@ -1,8 +1,7 @@
 import numpy as np
 import lifesim as ls
 import requests
-import matplotlib.pyplot as plt
-import scipy as sp
+
 
 #some conversions and constants
 au2par = 4.8481368111358*10**-6
@@ -48,31 +47,3 @@ def download_PPOP():
         file.write(data.content)
 
     return
-
-
-#transforms cartesian coordinates to polar coordinates
-def cartesian2polar_for_map(outcoords, inputshape):
-
-    y, x = outcoords
-    x = x - (inputshape[0] - 0.5)
-    y = y - (inputshape[0] - 0.5)
-
-    r = np.sqrt(x ** 2 + y ** 2)
-    phi = np.arctan2(-y, -x)
-    phi_index = (phi + np.pi) * inputshape[1] / (2 * np.pi)
-
-    return (r, phi_index)
-
-
-#produces a cartesian map from a given input image
-def pol_to_cart_map(image, image_size):
-    # create new column at end (360 deg) with same values as first column (0 deg) to get complete image
-    image_new = np.empty((image.shape[0], image.shape[1] + 1))
-    image_new[:, :-1] = image
-    image_new[:, -1] = image[:, 0]
-
-    cartesian_map = sp.ndimage.geometric_transform(image_new, cartesian2polar_for_map, order=1,
-                                              output_shape=(image_size, image_size), mode="constant",
-                                              extra_keywords={'inputshape': (image.shape)})
-
-    return cartesian_map

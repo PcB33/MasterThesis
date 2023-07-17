@@ -4,15 +4,16 @@ import matplotlib.pyplot as plt
 from auxiliary import path
 from Extraction_auxiliary import get_detection_threshold, get_detection_threshold_max
 import corner as corner
+from matplotlib.patches import Arrow, Circle, Ellipse
 
 
 #define variables ------------------------------------------------------------------------------------------------------
-file = 'randomsample_all_version2.csv'
+file = 'random_all_whitening_0.csv'
 angsep_accuracy_def = 1000#0.15
 phi_accuracy_def = 1000#10
 true_phi = 0
 #Define according to what SNR method to filter for detected should be made (== 1, 2, 3); this SNR is also used in the corner plot
-defining_criteria = 2
+defining_criteria = 1
 
 
 #load the input file, calculate some required variables and define empty lists of quantities to be stored --------------
@@ -64,11 +65,11 @@ for i in range(n_planets):
     jmax_extr = eval(extracted_data['extracted_Jmaxs'][i])[0]
 
 
-    if (defining_criteria == 1 and snr_1 < 5):
+    if (defining_criteria == 1 and snr_1 < 0):
         total_fails += 1
         snr_limit_fails += 1
 
-    elif (defining_criteria == 2 and snr_2 < 0):
+    elif (defining_criteria == 2 and snr_2 < 5):
         total_fails += 1
         snr_limit_fails += 1
 
@@ -163,9 +164,10 @@ print('')
 
 
 #plots to compare two of the SNRs --------------------------------------------------------------------------------------
+x = np.linspace(0,200,100)
 #Compare SNR_ps to SNR_1
 plt.scatter(x=SNR_ratios_1*SNR_ps_used,y=SNR_ps_used,color='black',marker='x',s=20,label='all planets')
-plt.plot(np.linspace(0,200,100),np.linspace(0,200,100), color='blue',label='theoretical line')
+plt.plot(x,x, color='blue',label='theoretical line')
 plt.title('Ratio of photon statistics SNR to naive extracted SNR')
 plt.xlabel('naive extracted SNR ')
 plt.ylabel('photon statistics SNR')
@@ -178,22 +180,24 @@ plt.grid()
 plt.show()
 
 #Compare SNR_ps to SNR_2
+best_fit = np.polyfit(x=SNR_ratios_2*SNR_ps_used,y=SNR_ps_used,deg=1)
 plt.scatter(x=SNR_ratios_2*SNR_ps_used,y=SNR_ps_used,color='black',marker='x',s=20,label='all planets')
-plt.plot(np.linspace(0,200,100),np.linspace(0,200,100), color='blue',label='theoretical line')
+plt.plot(x,x, color='blue',label='theoretical line')
+#plt.plot(x,best_fit[1]*x+best_fit[0],label='linear fit '+'(bias:'+str(np.round(best_fit[0],3))+')',color='orange',linestyle='--')
 plt.title('Ratio of photon statistics SNR to true position SNR')
 plt.xlabel('true position SNR ')
 plt.ylabel('photon statistics SNR')
-plt.xlim((30,45))
-plt.ylim((30,45))
+plt.xlim((0,15))
+plt.ylim((0,15))
 plt.legend(loc='best')
 plt.grid()
 #Uncomment the following line to save
-plt.savefig(path+'/06_plots/SNR_ps_to_SNR_2_changeme.pdf')
+#plt.savefig(path+'/06_plots/SNR_ps_to_SNR_2_changeme.pdf')
 plt.show()
 
 #Compare SNR_ps to SNR_3
 plt.scatter(x=SNR_ratios_3*SNR_ps_used,y=SNR_ps_used,color='black',marker='x',s=20,label='all planets')
-plt.plot(np.linspace(0,200,100),np.linspace(0,200,100), color='blue',label='theoretical line')
+plt.plot(x,x, color='blue',label='theoretical line')
 plt.title('Ratio of photon statistics SNR to max position SNR')
 plt.xlabel('max position SNR ')
 plt.ylabel('photon statistics SNR')
@@ -207,7 +211,7 @@ plt.show()
 
 #compare SNR_2 to SNR_3
 plt.scatter(x=SNR_ratios_2*SNR_ps_used,y=SNR_ratios_3*SNR_ps_used,color='black',marker='x',s=20,label='detected planets')
-plt.plot(np.linspace(0,200,100),np.linspace(0,200,100), color='blue',label='theoretical boundary')
+plt.plot(x,x, color='blue',label='theoretical boundary')
 plt.title('Ratio of true position FPR to maximum position FPR')
 plt.xlabel('max FPR')
 plt.ylabel('true FPR')
@@ -223,17 +227,18 @@ plt.show()
 #create histogram plots like figure 12 LIFE II -------------------------------------------------------------------------
 #lists with the variables to be shown as well as attributes
 variables = [extracted_data['snr_current'], extracted_data['temp_p'], extracted_data['radius_p'], extracted_data['angsep']*1000]
-number_bins = [260, 40, 36, 180]
-x_labels = ['SNR$_\mathrm{pred}$', '$T_\mathrm{p}$ [K]', '$R_\mathrm{p}$ [$R_\oplus$]', '$\Theta_\mathrm{p}$ [mas]']
+number_bins = [20, 40, 30, 180]
+x_labels = ['SNR$_\mathrm{ps}$', '$T_\mathrm{p}$ [K]', '$R_\mathrm{p}$ [$R_\oplus$]', '$\Theta_\mathrm{p}$ [mas]']
 y_labels = ['# of planets per Universe', '# of planets per Universe', '# of planets per Universe', '# of planets per Universe']
-x_lims = [[0,50], [140,310], [0.5,1.5], [0,100]]
-y_lims = [[0,6], [0,2.5], [0,2.2], [0,5.4]]
+x_lims = [[0,20], [160,210], [0.4,1.1], [0,90]]
+y_lims = [[0,1], [0,1], [0,1], [0,1]]
 
 n_universes = extracted_data['nuniverse'].nunique()
 
 
 #create figure and fill plots by running through for loop for all list entries
 fig, axes = plt.subplots(len(variables), 1, figsize=(6.4,9.6),)
+fig.suptitle('Rocky Cold Planets Distributions')
 
 for i in range(len(variables)):
     ax = axes[i]
@@ -274,7 +279,7 @@ all_data = np.vstack([data_SNR_ps_used, data_SNR_ratios_used, data_T_ratios, dat
 
 #define labels and quantiles
 labels = ['SNR$_\mathrm{ps}$',
-          'SNR$_\mathrm{est}$/SNR$_\mathrm{ps}$',
+          'FPF$_\mathrm{est}$/SNR$_\mathrm{ps}$',
           '$T_\mathrm{est} / T_\mathrm{true}$',
           '$R_\mathrm{est} / R_\mathrm{true}$',
           '$\Theta_\mathrm{est} / \Theta_\mathrm{true}$']
@@ -287,6 +292,11 @@ fig = corner.corner(np.transpose(all_data), fig=fig, range=[(7, 30), (0.5, 1.2),
                     labels=labels, show_titles=True, hist_bin_factor=1.5, max_n_ticks=5,
                     plot_density=False, plot_contours=False, no_fill_contours=True, color='darkblue', quantiles=quantiles)
 
+fig.text(0.95, 0.98, 'Exo-Earth Candidates', ha='right', va='top', fontsize=20, fontweight='bold')
+fig.text(0.95, 0.93, 'Total planets: '+str(n_planets), ha='right', va='top', fontsize=16)
+fig.text(0.95, 0.90, 'Failed detections: '+str(snr_limit_fails), ha='right', va='top', fontsize=16)
+fig.text(0.95, 0.87, 'False location extractions: '+str(position_fails), ha='right', va='top', fontsize=16)
+fig.text(0.95, 0.84, 'Overall Success Rate: '+str(np.round(total_accuracy*100,2))+'%', ha='right', va='top', fontsize=16)
 
 #set limits and ticks
 for i in range(len(fig.axes)):
@@ -308,7 +318,7 @@ for i in range(len(fig.axes)):
         ax.set_xticks([0.5, 0.75, 1., 1.25, 1.5])
         ax.set_xlim([0.4, 1.6])
     if i in [10, 11]:
-        ax.set_yticks([0.75, 1., 1.25, 1.5])
+        ax.set_yticks([0.5, 0.75, 1., 1.25, 1.5])
         ax.set_ylim([0.4, 1.6])
 
     if i in [18, 23]:
@@ -327,6 +337,19 @@ for i in range(len(fig.axes)):
 
 
 fig.axes[0].plot(ax.get_xlim(), ax.get_ylim(), ls="--", c=".3")
+
+# add arrows & circles
+#arrow_1 = Arrow(0.23, 0.08, -0.15, 0.03, width=0.1, transform=fig.axes[5].transAxes, color='black')
+#arrow_2 = Arrow(0.85, 0.5, -0.15, 0.00, width=0.1, transform=fig.axes[16].transAxes, color='darkgreen')
+#arrow_3 = Arrow(0.85, 0.5, -0.15, 0.00, width=0.1, transform=fig.axes[11].transAxes, color='darkgreen')
+
+#fig.axes[5].add_patch(arrow_1)
+#fig.axes[16].add_patch(arrow_2)
+#fig.axes[11].add_patch(arrow_3)
+
+#circle = Ellipse((0.05,0.15),width=0.3, height=0.2, angle=-50, transform=fig.axes[5].transAxes, fill=False, color='violet', alpha=0.8, linewidth=4)
+#fig.axes[5].add_patch(circle)
+
 #Uncomment the following line to save
-#plt.savefig(path+'/06_plots/cornerplot_changeme.pdf')
+plt.savefig(path+'/06_plots/cornerplot_changeme.pdf')
 plt.show()

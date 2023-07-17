@@ -4,12 +4,15 @@ import numpy as np
 from auxiliary import path, convert_to_minus_pi_to_pi, convert_to_zero_to_2pi
 import os
 import math
+import matplotlib.pyplot as plt
 from poliastro.bodies import Body
 from poliastro.twobody import Orbit
 from poliastro.constants.general import M_sun
 from astropy.constants import G
 from astropy import units as u
 import scipy as sp
+from tqdm import tqdm
+import mpmath as mp
 
 def get_detections(file, parameter_matrix):
     '''
@@ -232,17 +235,181 @@ def multivisit_0(input_file,n_visits,optimize_habitable,output_file):
     return
 
 
-def get_detection_threshold(L, sigma):
-    eta = np.linspace(0, 300, int(10 ** 5))
+def cdf_J(L, J):
+    '''
+    This function calculates the cumulative density function for the cost function J'' as described in LIFE II
+    equation (31)
+
+    :param J: float, value of the cost function []
+
+    :return cdf: Cumulative probability density of sum of L bins of the chi-squared distribution
+    '''
 
     fact = sp.special.factorial
     cdf = 1 / 2 ** L
     for l in range(0, L):
-        cdf += fact(L) / (2 ** L * fact(l) * fact(L - l)) * sp.special.gammainc((L - l) / 2, eta / 2)
+        cdf += fact(L) / (2 ** L * fact(l) * fact(L - l)) * sp.special.gammainc((L - l) / 2, J / 2)
+
+    return cdf
+
+
+def cdf_Jmax(L, J, radial_ang_px):
+
+    cdf_Jmax = cdf_J(L, J)**(radial_ang_px**2)
+
+    return cdf_Jmax
+
+
+def get_detection_threshold(L, sigma):
+
+    eta = np.linspace(0, 300, int(10 ** 5))
+
+    cdf = cdf_J(L, eta)
 
     eta_ind_sigma = np.searchsorted(cdf, sp.stats.norm.cdf(sigma))
     eta_threshold_sigma = eta[eta_ind_sigma]
 
     return eta_threshold_sigma
 
+
+def get_detection_threshold_max(L, sigma, radial_ang_pix):
+    '''
+    This function calculates the threshold above which one can be certain to 'sigma' sigmas that a detection is not
+    a false positive. See LIFE II section 3.2 for a detailed description
+
+    :param L: int; Number of wavelength bins as given by the wavelength range and the resolution parameter R []
+    :param sigma: float; # of sigmas outside of which a false positive must lie []
+
+    :return eta_threshold_sigma: float; threshold is terms of the cost function J []
+    '''
+
+    # create the input linspace
+    eta = np.linspace(0, 200, int(10 ** 3))
+
+    cdf = np.empty_like(eta)
+    for i in range(eta.size):
+        cdf[i] = cdf_Jmax(L, eta[i], radial_ang_pix)
+
+    # find the threshold value eta
+    eta_ind_sigma = np.searchsorted(cdf, sp.stats.norm.cdf(sigma))
+    eta_threshold_sigma = eta[eta_ind_sigma]
+
+    return eta_threshold_sigma
+
+
+def prob2sigma_conversion():
+    sigma = np.linspace(0,100,1001)
+    table = pd.DataFrame({'sigma': sigma})
+    table['prob'] = None
+
+    mp.mp.dps = 3200
+
+    for i in tqdm(range(sigma.size)):
+        sigma_mp = mp.mp.mpf(sigma[i])
+        prob = mp.mp.mpf('0.5')*(mp.erf(sigma_mp/mp.sqrt(2))+1)
+        table.at[i,'prob'] = prob
+
+    table.to_csv(path+'prob2sigma_conversiontable_minimal_new.csv')
+
+    return
+
+#prob2sigma_conversion()
+
+
+def show_std():
+    theta = np.linspace(0,100,1000)
+    noise = np.random.normal(loc=0,scale=5,size=theta.size)
+    planet_strong = np.random.normal(loc=0,scale=5,size=theta.size)
+    planet_weak = np.random.normal(loc=0, scale=1, size=theta.size)
+
+    for i in range(int(0.4*planet_strong.size),int(0.6*planet_strong.size)):
+        planet_strong[i] += -(theta[i]-50)**2+100
+
+    total_signal_strong = noise + planet_strong
+    total_signal_weak = noise + planet_weak
+
+    plt.plot(theta, noise, label='noise', color='darkblue')
+    plt.plot(theta, total_signal_weak, label='total signal', color='gold', alpha=0.7)
+    plt.title('Weak planet signal')
+    plt.xlabel('$\Theta$ [arb. units]')
+    plt.ylabel('Signal [arb. units]')
+    plt.ylim((-25,130))
+    plt.legend(loc='best')
+    plt.grid()
+    #plt.savefig(path+'/06_plots/std_weaksignal.pdf')
+    plt.show()
+
+    plt.plot(theta, noise, label = 'noise', color='darkblue')
+    plt.plot(theta, total_signal_strong, label='total signal', color='gold', alpha=0.7)
+    plt.title('Strong planet signal')
+    plt.xlabel('$\Theta$ [arb. units]')
+    plt.ylabel('Signal [arb. units]')
+    plt.ylim((-25, 130))
+    plt.legend(loc='best')
+    plt.grid()
+    #plt.savefig(path + '/06_plots/std_strongsignal.pdf')
+    plt.show()
+
+    return
+
+#show_std()
+
+
+def get_LIFE_I_plot():
+
+    sizes = ("Rocky + Super-Earths", "Sub-Neptunes", "Sub-Jovians")
+    temps = {
+        "Hot": (149, 75, 3),
+        "Warm": (37, 44, 2),
+        "Cold": (7, 22, 2),
+    }
+
+    x = np.arange(len(sizes))  # the label locations
+    y = np.array([0,0.5,1.25,2.25,3.25])
+    width = 0.25  # the width of the bars
+    multiplier = 4
+
+    fig, ax = plt.subplots()
+
+    rocky_eHZ = ax.bar(0,46,width=0.25,color='darkgreen',edgecolor='black')
+    ax.bar_label(rocky_eHZ,padding=3,fontsize=8)
+    EECs = ax.bar(0.5,18,width=0.25,color='lime',edgecolor='black')
+    ax.bar_label(EECs,padding=3,fontsize=8)
+
+    for attribute, measurement in temps.items():
+        if attribute=='Hot':
+            color='red'
+            hatch='\\'
+        elif attribute=='Warm':
+            color='gold'
+            hatch = '--'
+        elif attribute=='Cold':
+            color='blue'
+            hatch = '//'
+
+        offset = width * multiplier
+        rects = ax.bar(x + offset, measurement, width, label=attribute, color=color,edgecolor='black',hatch=hatch)
+        ax.bar_label(rects,padding=3,fontsize=8)
+        multiplier += 1
+
+    # Add some text for labels, title and custom x-axis tick labels, etc.
+    ax.set_ylabel('Detectable planets')
+    ax.set_xticks(y)
+    plt.gca().set_xticklabels(['Rocky \n eHZ','Exo-Earth \n Candidates','Rocky + \n Super-Earths','Sub-Neptunes','Sub-Jovians'], fontsize=9)
+    ax.legend(loc='upper left')
+    ax.set_ylim(0, 370)
+
+    textstr = 'D = 2.0 m \n Scenario 2'
+    ax.text(0.988, 0.985, textstr, transform=ax.transAxes,
+            fontsize=10, verticalalignment='top', horizontalalignment='right',
+            bbox=dict(facecolor='white', edgecolor='black'))
+
+    # uncomment following line to save
+    #plt.savefig(path + '/06_plots/LIFE_I_plot.pdf')
+
+    plt.show()
+
+    return
+
+#get_LIFE_I_plot()
 

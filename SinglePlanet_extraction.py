@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 import lifesim as ls
 from Extraction import ML_Extraction
 from Extraction_auxiliary import get_detection_threshold, get_detection_threshold_max
@@ -55,10 +54,11 @@ np.set_printoptions(threshold=sys.maxsize)
 #This part of the code creates the test planet from the old lifesim version (used to test the new version). To make it
 # run, uncomment this part and define the planet_number variable to be =0. Additionally, the following changes must be 
 # made to other parts of the code:
-# (1) In Extraction.py --> single_spectrum_extraction --> self.signals, self.ideal_signals = self.inst.get_signal(), replace
-#       the argument for  flux_planet_spectrum with flux_planet_spectrum=[self.wl_bins * u.meter, self.single_data_row['planet_flux_use'][0] * u.photon / u.second / (u.meter ** 3)]
-# (2) In instrument.py --> get_signals(), change  the line self.adjust_bl_to_hz(hz_center=hz_center, distance_s=distance_s)
-#       to self.data.inst['bl'] = self.data.catalog['baseline'][0]
+# (1) In Extraction.py --> single_spectrum_extraction --> self.signals, self.ideal_signals = self.inst.get_signal(),
+#       replace the argument for  flux_planet_spectrum with flux_planet_spectrum=[self.wl_bins * u.meter,
+#       self.single_data_row['planet_flux_use'][0] * u.photon / u.second / (u.meter ** 3)]
+# (2) In instrument.py --> get_signals(), change  the line self.adjust_bl_to_hz(hz_center=hz_center,
+#       distance_s=distance_s) to self.data.inst['bl'] = self.data.catalog['baseline'][0]
 
 
 first_row=pd.DataFrame(ex_bus.data.catalog.iloc[0]).transpose()
@@ -125,18 +125,20 @@ first_row['t_slew'][0] = 0
 ex_bus.data.catalog=pd.concat([first_row, ex_bus.data.catalog],ignore_index=True)
 '''
 
-
-
 #define variables ------------------------------------------------------------------------------------------------------
-planet_number = 2798 #118 #5 #2785 #11 #24 #4 #2798 #17 #2 #0
+planet_number = 9 #118 #5 #2785 #11 #24 #4 #2798 #17 #2 #0
 n_runs = 1
 mu=0
+whitening_limit = 0
 angsep_accuracy_def = 0.15
 phi_accuracy_def = 10
 
 
 #Call the main_parameter_extraction function ---------------------------------------------------------------------------
-spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs = extr.main_parameter_extraction(n_run=n_runs, plot=True, ideal=False, mu=mu, single_planet_mode=True, planet_number=planet_number, filepath=path+'05_output_files/')
+spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs = \
+    extr.main_parameter_extraction(n_run=n_runs, plot=True, ideal=False, mu=mu,
+                                   whitening_limit=whitening_limit, single_planet_mode=True,
+                                   planet_number=planet_number, filepath=path+'05_output_files/')
 
 
 #Perform the data analysis ---------------------------------------------------------------------------------------------
@@ -187,13 +189,15 @@ print('Median maximum of cost function J:',np.round(Jmax_median,0),'+/-',np.roun
 print('')
 
 
-#Count number of failed extractions. position_fails mean failed position extractions, total_fails means either failed position extraction or J below threshold
+#Count number of failed extractions. position_fails mean failed position extractions, total_fails means either
+#   failed position extraction or J below threshold
 position_fails = 0
 total_fails = 0
 
 
 for i in range(n_runs):
-    if ((rss[i] > (ex_bus.data.catalog['angsep'][planet_number]*(1+angsep_accuracy_def))) or (rss[i] < (ex_bus.data.catalog['angsep'][planet_number]*(1-angsep_accuracy_def)))):
+    if ((rss[i] > (ex_bus.data.catalog['angsep'][planet_number]*(1+angsep_accuracy_def))) or
+            (rss[i] < (ex_bus.data.catalog['angsep'][planet_number]*(1-angsep_accuracy_def)))):
         position_fails += 1
         total_fails += 1
     elif ((np.abs(phiss[i]-extr.planet_azimuth)+phi_accuracy_def) % 360 > phi_accuracy_def+phi_accuracy_def):

@@ -91,13 +91,15 @@ class ML_Extraction(ExtractionModule):
 
         (n_l, n_r, n_p) = self.tm_chop.shape
 
+        # get variance of received noise (without signal)
+        var_noise = np.var(self.noise, axis=1, ddof=1)
+
         if (self.ideal == True):
             # if no noise is included, B_noise is obsolete
             self.B_noise = np.zeros_like(self.B)
 
         else:
-            # get variance of received noise (without signal) and calculate B analogously to before for this variance
-            var_noise = np.var(self.noise, axis=1, ddof=1)
+            # calculate B analogously to before for the new variance
             B_vec_noise = (self.tm_chop ** 2).sum(axis=-1) / var_noise[:, np.newaxis]
             self.B_noise = np.repeat(B_vec_noise[:, :, np.newaxis], n_p, axis=2)
 
@@ -500,9 +502,10 @@ class ML_Extraction(ExtractionModule):
         in LIFE II and the Thesis. In a first step, the auxiliary matrices B&C are calculated, from which the estimated
         flux is calculated. Based in this the cost function is derived, from which the planet position is inferred.
         Also, the planet temperature and radius are extracted by fitting the extracted fluxes to a blackbody curve. To
-        calculate the signal-to-noise ratios, the signal is first whitened, i.e. the process is repeated but taking the
-        variance only of the noise as opposed to the whole signal. Using the whitened signal, the SNR is calculated
-        according to three different methods as described in the Thesis
+        calculate the signal-to-noise ratios, the signal is first whitened (if the threshold self.whitening_limit
+        is obtained), i.e. the process is repeated but taking the variance only of the noise as opposed to the whole
+        signal. Using the whitened signal, the SNR is calculated according to three different methods as described in
+        the Thesis
 
         :param mu: float; regularization parameter []
         :param plot: boolean; determines whether to plot the cost function heatmap, the blackbody plot and the different
@@ -541,6 +544,10 @@ class ML_Extraction(ExtractionModule):
         theta_max = np.unravel_index(np.argmax(self.J, axis=None), self.J.shape)
         (r, p) = theta_max
 
+        # determine the true values of r and phi in order to caclulate the value of J at this pixel
+        true_r = int(self.single_data_row['angsep'] / 2 / self.hfov_cost * self.image_size / 180 / 3600 * np.pi)
+        true_phi = 0
+
         # calculate the estimated flux at the position of Jmax (total and positive part)
         F_est = F[:, r, p]
         F_est_pos = F_pos[:, r, p]
@@ -548,7 +555,7 @@ class ML_Extraction(ExtractionModule):
         # calculate the sigma at the position of Jmax
         if (self.ideal == True):
             # sigma equal to zero leads to errors in the curve fitting; take very small value instead
-            sigma_est = np.ones((self.L)) * 10 ** (-9)
+            sigma_est = np.ones((self.L)) * 10 ** (-6)
 
         else:
             # calculate sigma at the position of Jmax
@@ -566,45 +573,82 @@ class ML_Extraction(ExtractionModule):
             popt = np.array([self.single_data_row['temp_p'], self.single_data_row['radius_p']])
             perr = np.array([0.1, 0.1])
 
+
         T_est = popt[0]
         R_est = popt[1]
         T_sigma = perr[0]
         R_sigma = perr[1]
 
+        # determine the SNR before whitening
+        SNR_est_before_whitening = np.sum((F_est_pos / sigma_est) ** 2) ** (1 / 2)
 
-        # calculate the blackbody flux of the planet according to the estimated parameters
-        est_flux = black_body(mode='planet',
-                              bins=self.wl_bins,
-                              width=self.wl_bin_widths,
-                              temp=T_est,
-                              radius=R_est,
-                              distance=self.single_data_row['distance_s']
-                              )
+        # determine whether the whitening limit is obtained
+        if (SNR_est_before_whitening >= self.whitening_limit):
+            whitening = True
+        else:
+            whitening = False
 
-        # calculate the estimated flux retrieved from the planet with the assumed parameters
-        _, self.est_ideal_signal = self.run_socket(s_name='instrument',
-                                                   method='get_signal',
-                                                   temp_s=self.single_data_row['temp_s'],
-                                                   radius_s=self.single_data_row['radius_s'],
-                                                   distance_s=self.single_data_row['distance_s'],
-                                                   lat_s=self.single_data_row['lat'],
-                                                   z=self.single_data_row['z'],
-                                                   angsep=2 * r * self.hfov_cost / self.image_size * 180 * 3600 / np.pi,
-                                                   flux_planet_spectrum=[self.wl_bins * u.meter,
-                                                                         est_flux / self.wl_bin_widths * u.photon /
-                                                                         u.second / (u.meter ** 3)],
-                                                   integration_time=self.single_data_row['int_time'],
-                                                   phi_n=self.n_steps)
+        if (plot==True):
+            print('Signal whitening: ',whitening)
 
 
-        # calculate the noise by subtracting the estimated planet signal from the total signal
-        self.noise = self.signals - self.est_ideal_signal
+        # if applicable, the signal is whitened in the following
+        if (whitening == True):
 
-        # recalculate the B and C matrices with the whitened signal
-        self.get_B_C_whitened()
+            # calculate the blackbody flux of the planet according to the estimated parameters
+            est_flux = black_body(mode='planet',
+                                  bins=self.wl_bins,
+                                  width=self.wl_bin_widths,
+                                  temp=T_est,
+                                  radius=R_est,
+                                  distance=self.single_data_row['distance_s']
+                                  )
 
-        # recalculate the signals using the whitened noise
-        F_white, F_white_pos, F_noise, F_noise_pos = self.get_F_estimate_whitened(mu=self.mu)
+            # calculate the estimated flux retrieved from the planet with the assumed parameters
+            _, self.est_ideal_signal = self.run_socket(s_name='instrument',
+                                                       method='get_signal',
+                                                       temp_s=self.single_data_row['temp_s'],
+                                                       radius_s=self.single_data_row['radius_s'],
+                                                       distance_s=self.single_data_row['distance_s'],
+                                                       lat_s=self.single_data_row['lat'],
+                                                       z=self.single_data_row['z'],
+                                                       angsep=2 * r * self.hfov_cost / self.image_size
+                                                                            * 180 * 3600 / np.pi,
+                                                       flux_planet_spectrum=[self.wl_bins * u.meter,
+                                                                             est_flux / self.wl_bin_widths * u.photon /
+                                                                             u.second / (u.meter ** 3)],
+                                                       integration_time=self.single_data_row['int_time'],
+                                                       phi_n=self.n_steps)
+
+
+            # calculate the noise by subtracting the (estimated) planet signal from the total signal
+            if (self.ideal == True):
+                self.noise = self.signals - self.ideal_signals
+            else:
+                self.noise = self.signals - self.est_ideal_signal
+
+            # recalculate the B and C matrices with the whitened signal
+            self.get_B_C_whitened()
+
+            # recalculate the signals using the whitened noise
+            F_white, F_white_pos, F_noise, F_noise_pos = self.get_F_estimate_whitened(mu=self.mu)
+
+
+        else:
+            # this noise is based off ground truth data; however, the quantities derived from it are only used for the
+            #   plot that shows the histogram of a theoretical purely noisy signal and do not enter the extracted
+            #   quantities in any way
+            self.noise = self.signals - self.ideal_signals
+            self.get_B_C_whitened()
+            _, _, _, F_noise_pos = self.get_F_estimate_whitened(mu=self.mu)
+
+            # these quantities no longer include ground truth data and are thus set to the un-whitened values
+            F_white_pos = F_pos
+            
+            self.B_noise = self.B
+            self.C_noise_var = self.C
+
+
 
         # take the signal at the derived position
         F_white_pos_max = F_white_pos[:, r, p]
@@ -612,7 +656,7 @@ class ML_Extraction(ExtractionModule):
         #recalculate the sigma for the whitened noise
         if (self.ideal == True):
             # sigma equal to zero leads to errors in the curve fitting; take very small value instead
-            sigma_est = np.ones((self.L)) * 10 ** (-9)
+            sigma_est = np.ones((self.L)) * 10 ** (-6)
 
         else:
             # calculate sigma at the position of Jmax
@@ -627,10 +671,6 @@ class ML_Extraction(ExtractionModule):
         self.J_FPR = (F_pos * self.C_noise_var).sum(axis=0)
         Jmax = np.max(self.J_FPR)
 
-
-        # determine the true values of r and phi in order to caclulate the value of J at this pixel
-        true_r = int(self.single_data_row['angsep'] / 2 / self.hfov_cost * self.image_size / 180 / 3600 * np.pi)
-        true_phi = 0
 
         J_true_pos = self.J_FPR[true_r, true_phi]
         J_max_pos = self.J_FPR[r, p]
@@ -882,8 +922,9 @@ class ML_Extraction(ExtractionModule):
                     Rs, Rs_sigma, FPRs, FPR_maxs
 
 
-    def main_parameter_extraction(self, n_run=1, mu=0, n_processes=1, precision_limit=1600, plot=False, ideal=False,
-                                        single_planet_mode=False, planet_number=0, save_mode=True, filepath=None):
+    def main_parameter_extraction(self, n_run=1, mu=0, whitening_limit=0, n_processes=1, precision_limit=1600,
+                                        plot=False, ideal=False, single_planet_mode=False, planet_number=0,
+                                        save_mode=True, filepath=None):
         '''
         The main_parameter_extraction function is the function that should get called by other files. In defines all the
         required parameters and then runs single_spectrum_extraction for either one specified planet
@@ -892,13 +933,14 @@ class ML_Extraction(ExtractionModule):
         extraction of the planets in the catalog of the bus in parallel. The output is directly adjusted and saved
         (provided save_mode=True) in path/changeme.csv
 
-        :param n_run: int; number of runs to perform for each planet
+        :param n_run: int; number of runs to perform for each planet []
         :param mu: float; regularization parameter for the calculation of the cost function J as described in
                     section 3.1 of LIFE II []
         :param n_processes: int; number of processes to run in parallel for multi-planet extraction (ignored if
-                    single_planet_mode=True)
+                    single_planet_mode=True) []
+        :param whitening_limit: float; threshold above which a signal with SNR=whitening_limit should be whitened []
         :param precision_limit: int; determines the maximum precision the calculation of the false positive rate
-                    will use before deeming that it is high enough and set to 10000
+                    will use before deeming that it is high enough and set to 10000 []
         :param plot: boolean; determines whether to show plots throughout the runs (only advised for small n_run)
         :param ideal: boolean; if True, no noise is included in the extraction
         :param single_planet_mode: boolean; if True, signal extraction is performed for only one planet in the catalog
@@ -922,15 +964,16 @@ class ML_Extraction(ExtractionModule):
         - 'max_wl': float; maximum wavelength captured by the instrument [m]
         - 'wl_bins': np.ndarray of size L; consists of all the wavelength bins (middle wavelength of each bin) in [m]
         - 'wl_bin_widths': np.ndarray of size L; consists of all the widths of the wavelength bins in [m]
-        - 'image_size': int, precision that the image can be resolved to in one dimension in [number of pixels]
-        - 'radial_ang_px': int, precision that the image can be resolved to in the radial coordinate in
+        - 'image_size': int; precision that the image can be resolved to in one dimension in [number of pixels]
+        - 'radial_ang_px': int; precision that the image can be resolved to in the radial coordinate in
                                 [number of pixels]
-        - 'hfov': np.ndarray of size L, consists of the half field of views of the instrument in each wavelength bin
+        - 'hfov': np.ndarray of size L; consists of the half field of views of the instrument in each wavelength bin
                                 in [radians]
-        - 'mu': float, regularization parameter for the calculation of the cost function J as described above []
+        - 'mu': float; regularization parameter for the calculation of the cost function J as described above []
+        - 'whitening_limit': float; threshold above which a signal with SNR=whitening_limit should be whitened []
         - 'n_run': int; number of runs to perform for each planet []
         - 'ideal': boolean; if True, no noise is included in the extraction []
-        - 'precision_limit': int; maximum precision the calculation of the false positive rate
+        - 'precision_limit': int; maximum precision the calculation of the false positive rate []
         - 'filepath': str; path to where the files should be saved
 
         Two attributes concerning the angular dimensioning of the image:
@@ -958,6 +1001,7 @@ class ML_Extraction(ExtractionModule):
         self.radial_ang_px = int(self.image_size / 2)
         self.hfov = self.data.inst['hfov']
         self.mu = mu
+        self.whitening_limit = whitening_limit
         self.n_run = n_run
         self.ideal = ideal
         self.precision_limit = precision_limit
