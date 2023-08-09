@@ -1,7 +1,7 @@
 import numpy as np
 import lifesim as ls
 from Extraction import ML_Extraction
-from Extraction_auxiliary import get_detection_threshold, get_detection_threshold_max
+from Extraction_auxiliary import *
 from auxiliary import path
 import statistics as st
 import scipy as sp
@@ -17,7 +17,16 @@ ex_bus.data.options.set_scenario('baseline')
 #import catalog
 ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard10_scen1_spectrum.hdf5')
 
-#add the instrument, transmission, extraction and noise modules and connect them
+# set the resolution to the required level
+L_used = ex_bus.data.catalog['planet_flux_use'][0][0].size
+if (L_used == 31):
+    ex_bus.data.options.set_manual(spec_res=20.)
+elif (L_used == 77):
+    ex_bus.data.options.set_manual(spec_res=50.)
+elif (L_used == 154):
+    ex_bus.data.options.set_manual(spec_res=100.)
+
+# add the instrument, transmission, extraction and noise modules and connect them
 instrument = ls.Instrument(name='inst')
 ex_bus.add_module(instrument)
 
@@ -50,95 +59,25 @@ instrument.apply_options()
 
 np.set_printoptions(threshold=sys.maxsize)
 
-'''
-#This part of the code creates the test planet from the old lifesim version (used to test the new version). To make it
-# run, uncomment this part and define the planet_number variable to be =0. Additionally, the following changes must be 
-# made to other parts of the code:
-# (1) In Extraction.py --> single_spectrum_extraction --> self.signals, self.ideal_signals = self.inst.get_signal(),
-#       replace the argument for  flux_planet_spectrum with flux_planet_spectrum=[self.wl_bins * u.meter,
-#       self.single_data_row['planet_flux_use'][0] * u.photon / u.second / (u.meter ** 3)]
-# (2) In instrument.py --> get_signals(), change  the line self.adjust_bl_to_hz(hz_center=hz_center,
-#       distance_s=distance_s) to self.data.inst['bl'] = self.data.catalog['baseline'][0]
-
-
-first_row=pd.DataFrame(ex_bus.data.catalog.iloc[0]).transpose()
-
-first_row['distance_s'][0]=15.25
-first_row['radius_s'][0]=1
-first_row['temp_s'][0]=5778 * 1
-first_row['l_sun'][0]=1
-first_row['radius_p'][0]=1.25
-first_row['semimajor_p'][0]=1.76
-first_row['angsep'][0] = first_row['semimajor_p'][0]/first_row['distance_s'][0]
-first_row['z'][0]=3
-first_row['temp_p'][0]=191.90
-first_row['baseline'][0] = 15.817 #optimal
-first_row['int_time'][0] = 400*55*60*60
-first_row['hz_in'][0] = 0.75
-first_row['hz_out'][0] = 1.76
-first_row['hz_center'][0] = 1.254
-first_row['habitable'][0] = True
-first_row['s_in'][0] = 1.766
-first_row['s_out'][0] = 0.324
-first_row['detected'][0] = True
-first_row['lat'][0] = np.pi/4
-
-fgamma = black_body(mode='planet',
-                    bins=ex_bus.data.inst['wl_bins'],
-                    width=ex_bus.data.inst['wl_bin_widths'],
-                    temp=first_row['temp_p'][0],
-                    radius=first_row['radius_p'][0],
-                    distance=first_row['distance_s'][0]) \
-                    / ex_bus.data.inst['wl_bin_widths']
-
-first_row['planet_flux_use'][0] = [fgamma]
-
-#dummy (not actually used)
-first_row['p_orb'][0] = 10
-first_row['mass_p'][0] = 2
-first_row['ecc_p'][0] = 0
-first_row['inc_p'][0] = 0
-first_row['large_omega_p'][0] = 1
-first_row['small_omega_p'][0] = 1
-first_row['theta_p'][0] = 1
-first_row['albedo_geom_mir'][0] = 0.05
-first_row['albedo_geom_mir'][0] = 0.05
-first_row['sep_p'][0] = first_row['semimajor_p'][0]
-first_row['maxangsep'][0] = first_row['sep_p'][0]
-first_row['flux_p'][0] = 0 #?????
-first_row['fp'][0] = 0 #??????
-first_row['mass_s'][0] = 1
-first_row['ra'][0] = 100
-first_row['dec'][0] = 50
-first_row['nuniverse'][0] = 0
-first_row['nstar'][0] = 0
-first_row['stype'][0] = 'G'
-first_row['id'][0] = -1
-first_row['name_s'][0] = 'None'
-first_row['lon'][0] = 1
-first_row['snr_1h'][0] = 0 #???
-first_row['photon_rate_planet'][0] = 0 #?????
-first_row['photon_rate_noise'][0] = 0 #????
-first_row['snr_current'][0] = 26 #????
-first_row['t_slew'][0] = 0
-
-ex_bus.data.catalog=pd.concat([first_row, ex_bus.data.catalog],ignore_index=True)
-'''
-
 #define variables ------------------------------------------------------------------------------------------------------
-planet_number = 9 #118 #5 #2785 #11 #24 #4 #2798 #17 #2 #0
+planet_number = 5 #118 #5 #2785 #11 #24 #4 #2798 #17 #2 #0
 n_runs = 1
 mu=0
 whitening_limit = 0
 angsep_accuracy_def = 0.15
 phi_accuracy_def = 10
 
+include_dips = False
+atmospheric_scenario = mix_40
+
 
 #Call the main_parameter_extraction function ---------------------------------------------------------------------------
-spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs = \
-    extr.main_parameter_extraction(n_run=n_runs, plot=True, ideal=False, mu=mu,
+spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs,\
+    induced_dips, t_scores, SNR_ps_news, bayes_factors = \
+    extr.main_parameter_extraction(n_run=n_runs, plot=True, mu=mu,
                                    whitening_limit=whitening_limit, single_planet_mode=True,
-                                   planet_number=planet_number, filepath=path+'05_output_files/')
+                                   planet_number=planet_number, include_dips=include_dips,
+                                   atmospheric_scenario=atmospheric_scenario, filepath=path+'05_output_files/')
 
 
 #Perform the data analysis ---------------------------------------------------------------------------------------------
@@ -169,10 +108,10 @@ std_FPR = np.std(FPRs)
 mean_FPR_max = FPR_maxs.mean(axis=0)
 std_FPR_max = np.std(FPR_maxs)
 
-print('snr by photon count:',np.round(ex_bus.data.catalog['snr_current'][planet_number],5))
-print('snr_extracted:',np.round(mean_s,5),'+/-',np.round(std_s,5))
-print('FPR extracted:',np.round(mean_FPR,5),'+/-',np.round(std_FPR,5))
-print('FPR max extracted:', np.round(mean_FPR_max,5),'+/-',np.round(std_FPR_max,5))
+print('snr by photon statistics:',np.round(ex_bus.data.catalog['snr_current'][planet_number],3))
+print('snr_extracted:',np.round(mean_s,5),'+/-',np.round(std_s,3))
+print('FPR extracted:',np.round(mean_FPR,5),'+/-',np.round(std_FPR,3))
+print('FPR max extracted:', np.round(mean_FPR_max,5),'+/-',np.round(std_FPR_max,3))
 print('')
 
 
@@ -193,7 +132,6 @@ print('')
 #   failed position extraction or J below threshold
 position_fails = 0
 total_fails = 0
-
 
 for i in range(n_runs):
     if ((rss[i] > (ex_bus.data.catalog['angsep'][planet_number]*(1+angsep_accuracy_def))) or
@@ -240,3 +178,40 @@ for j in range (len(rss)):
 print('Planet detected too close to star in ',too_close,' of ',len(rss),' cases')
 print('Planet detected too far from star in ',too_far,' of ',len(rss),' cases')
 print('')
+
+
+# check dip for first planet
+if (include_dips == False):
+    print('No dips included')
+else:
+    strong_alpha = 0.09
+    decisive_alpha = 0.01
+    strong_jeffrey = 1.0
+    decisive_jeffrey = 2.0
+
+    strong_t_statistics = np.zeros_like(t_scores)
+    decisive_t_statistics = np.zeros_like(t_scores)
+    strong_bayesian_models = np.zeros_like(bayes_factors)
+    decisive_bayesian_models = np.zeros_like(bayes_factors)
+
+    for i in range(n_runs):
+        for j in range (len(atmospheric_scenario.dip_molecules)):
+            if (t_scores[i][j] <= strong_alpha):
+                strong_t_statistics[i][j] = 1
+            if (t_scores[i][j] <= decisive_alpha):
+                decisive_t_statistics[i][j] = 1
+            if (np.log10(bayes_factors[i][j]) >= strong_jeffrey):
+                strong_bayesian_models[i][j] = 1
+            if (np.log10(bayes_factors[i][j]) >= decisive_jeffrey):
+                decisive_bayesian_models[i][j] = 1
+
+
+    print('Dips induced:', induced_dips[0])
+    print('New SNR photon statistics:', np.round(SNR_ps_news[0],3))
+    print('t-scores:', t_scores[0])
+    print('Dips extracted alpha=0.09:', strong_t_statistics[0])
+    print('Dips extracted alpha=0.01:', decisive_t_statistics[0])
+
+    print('Log of Bayes factors:', np.round(np.log10(bayes_factors[0]),3))
+    print('Models with strong evidence:', strong_bayesian_models[0])
+    print('Models with decisive evidence:', decisive_bayesian_models[0])

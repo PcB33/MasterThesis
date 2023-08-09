@@ -9,6 +9,137 @@ from lifesim.util.constants import c, h, k, radius_earth, m_per_pc
 import mpmath as mp
 
 
+class Atmospheric_scenarios:
+    '''
+    This class defines different atmospheric scenarios. At the moment, the molecules included are CO_2, O_3 and H_20
+    at different levels and probabilities of existance. Their strength and existance is not defined by concentrations
+    but rather by how deep a Gaussian dip they induce into the planet atmosphere
+    '''
+
+    def __init__(self, name, likelihood_CO2, likelihood_O3, likelihood_H2O):
+        '''
+        This function initializes an instance of the class
+
+        :param name: str; name of the instance
+        :param likelihood_CO2: float; assumed fraction of the planets in the universe that contain CO_2
+        :param likelihood_O3: float; assumed fraction of the planets in the universe that contain O_3
+        :param likelihood_H2O: float; assumed fraction of the planets in the universe that contain H_2O
+
+        Attributes:
+        ----------------
+        - 'name': str; name of the atmospheric scenario
+        - 'dip_molecules': list; all molecules that could be included in the scenario (as strings)
+        - 'dip_centers': list; center of the wavelength dip induced by each molecule in [micron]
+        - 'dip_widths': list; width of the wavelength dip induced by each molecule in [micron]. Given as a np.array with
+                                minimum and maximum wavelength over which the width is uniformly selected
+        - 'dip_avg_widths': list; average widths of the wavelength dip induced by each molecule in [microns]
+        - 'dip_depths': list; depth of the wavelength dip induced by each molecule as a fraction of the blackbody curve
+                                of the planet []. Given as a np.array with minimum and maximum fraction over which
+                                the depth is uniformly selected
+        - 'dip_avg_depths': list; average depth of the wavelength dip induced by each molecule as a fraction []
+        - 'dip_likelihoods': list; assumed fractions of the planets containing each molecule []
+        '''
+
+        self.name = name
+        self.dip_molecules = [r'$CO_2$', r'$O_3$', r'$H_2O$']
+        self.dip_centers = [15*10**-6, 9.7*10**-6, 6.5*10**-6]
+        self.dip_widths = [np.array([0.5*10**-6,1.5*10**-6]), np.array([0.1*10**-6,0.3*10**-6]), np.array([0.4*10**-6, 1.0*10**-6])]
+        self.dip_avg_widths = [1.0*10**-6, 0.2*10**-6, 0.7*10**-6]
+        self.dip_depths = [np.array([0.2,0.7]), np.array([0.2,0.7]), np.array([0.2,0.7])]
+        self.dip_avg_depths = [0.45, 0.45, 0.45]
+        self.dip_likelihoods = [likelihood_CO2, likelihood_O3, likelihood_H2O]
+
+        pass
+
+
+    def get_width(self, molecule):
+        '''
+        Function that selects the dip-width of a molecule for a planet based on a random uniform selection between the
+        minimum and maximum assumed widths
+
+        :param molecule: str; molecule in question of which to determine the width
+
+        :return width: float; selected width the wavelength dip induced by the molecule for the planet in [micron]
+        '''
+
+        index = self.dip_molecules.index(molecule)
+        width = np.random.uniform(self.dip_widths[index][0],self.dip_widths[index][1])
+
+        return width
+
+
+    def get_depth(self, molecule):
+        '''
+        Function that selects the dip-depth of a molecule for a planet based on a random uniform selection between the
+        minimum and maximum assumed depths
+
+        :param molecule: str; molecule in question of which to determine the depth
+
+        :return: float; selected depth of the wavelength dip induced by the molecule for the planet as a fraction of
+                            the blackbody curve of the planet []
+        '''
+
+        index = self.dip_molecules.index(molecule)
+        depth = np.random.uniform(self.dip_depths[index][0], self.dip_depths[index][1])
+
+        return depth
+
+
+    def expected_spectrum(self, molecule, wl_bins, wl_bins_and_distS_array, Tp, Rp, dip_width, dip_depth):
+        '''
+        This function calculates the blackbody spectrum of a planet with Gaussian dips arising from a molecule
+
+        :param molecule: str; molecule in question that induced the dip in the spectrum
+        :param wl_bins: np.ndarray of size L; consists of all the wavelength bins (middle wavelength of each bin) in [m]
+        :param wl_bins_and_distS_array: np.ndarray of size (L,2); matrix containing the wavelength bins in [m] and the
+                        distance of Earth to the host star in [parsec]
+        :param Tp: float; planet temperature in [K]
+        :param Rp: float; planet radius in [R_earth]
+        :param dip_width: float; standard deviation of the Gaussian dip induced by the molecule in [m]
+        :param dip_depth: float; depth defined as the fraction the planet blackbody curve is reduced by at the center
+                        of the induced Gaussian dip []
+
+        :return expected spectrum: np.ndarray of size L; photon flux in each of the L wavelength bin in [photons]
+        '''
+
+        # planet blackbody spectrum before taking the dip into account
+        expected_blackbody = BB_for_fit(wl_bins_and_distS_array, Tp, Rp)
+
+        index = self.dip_molecules.index(molecule)
+
+        # calculate the Gaussian dip induced by the molecule
+        gaussian_dip = sp.stats.norm.pdf(wl_bins, loc=self.dip_centers[index], scale=dip_width)
+        gaussian_dip_normalized = gaussian_dip / np.max(gaussian_dip) * expected_blackbody[np.abs(wl_bins -
+                                                                                    self.dip_centers[index]).argmin()]
+        # calculate the planet blackbody spectrum minus the Gaussian dip
+        expected_spectrum = expected_blackbody - dip_depth * gaussian_dip_normalized
+
+        return expected_spectrum
+
+
+# define the atmospheric scenarios
+only_CO2 = Atmospheric_scenarios('only CO2', 1.0, 0.0, 0.0)
+only_O3 = Atmospheric_scenarios('only O3', 0.0, 1.0, 0.0)
+only_H2O = Atmospheric_scenarios('only H2O', 0.0, 0.0, 1.0)
+mix_40 = Atmospheric_scenarios('mix 40', 0.4, 0.4, 0.4)
+#ToDo make a scenario with realistic likelihoods based on the occurences in our solar system (or see if you can find something in the Internet)
+
+
+def get_ratio_safe(list):
+    '''
+    This function takes lists with "0"s and "1"s as input and calculates the fraction of "1"s
+
+    :param list: list; contains elements equal to "0" or "1"
+
+    :return: float; fraction of "1"s in the list
+    '''
+
+    if (len(list) == 0):
+        return 0
+    else:
+        return sum(list)/len(list)
+
+
 def cdf_J(L, J):
     '''
     This function calculates the cumulative density function for the cost function J'' as described in LIFE II
@@ -158,7 +289,7 @@ def get_detection_threshold(L, sigma):
     '''
 
     # create the input linspace
-    eta = np.linspace(0, 300, int(10 ** 5))
+    eta = np.linspace(0, 300, int(10 ** 4))
 
     # calculate the cdf values for each element in the eta-linspace
     cdf = cdf_J(L, eta)
@@ -182,7 +313,7 @@ def get_detection_threshold_max(L, sigma, radial_ang_pix):
     '''
 
     # create the input linspace
-    eta = np.linspace(0, 200, int(10 ** 3))
+    eta = np.linspace(0, 300, int(10 ** 3))
 
     # calculate the cdf values for each element in the eta-linspace
     cdf = np.empty_like(eta)
@@ -221,6 +352,12 @@ def BB_for_fit(wl_and_distS, Tp, Rp):
             (Rp * radius_earth) / (dist_s * m_per_pc)) ** 2
 
     return fgamma
+
+
+def t_distribution(x,dof):
+    t_distr = sp.stats.t.pdf(x=x,df=dof)
+
+    return t_distr
 
 
 def get_Dsqr_mat(L):
@@ -437,3 +574,66 @@ def plot_multi_map(maps, map_type, hfov_mas, colormap="inferno", vmin=None, vmax
     plt.show()
 
     return
+
+
+def get_rates(retrieved_values, true_values, threshold, bound_below):
+    '''
+    This function calculates the confusion matrix for a given set of retrieved and actual values
+
+    :param retrieved_values: np.ndarray of size corresponding to the number of planets; confidence levels in the measure
+                                of the threshold of the retrieved values (t-score, log of bayesian factor) []
+    :param true_values: np.ndarray of size corresponding to the number of planets; confidence levels in the measure
+                                of the threshold of the true values (t-score, log of bayesian factor) []
+    :param threshold: float; threshold below/above which a retreived value is considered a detection []
+    :param bound_below: boolean; if True, retrieved values below the threshold are considered detections
+                                (alpha, t-score), otherwise above (jeffrey, log of bayes factor)
+
+    :return TP: float; True Positive, number of instances correctly predicted as positive by the model used []
+    :return FP: float; False Positive, number of instances incorrectly predicted as positive by the model used []
+    :return FN: float; False Negative, number of instances incorrectly predicted as negative by the model used []
+    :return TN: float; True Negative, number of instances correctly predicted as negative by the model used []
+    :return TPR: float; True Positive Rate, proportion of actual positive instances that are correctly identified as
+                            positive by the model used []
+    :return FPR: float; False Positive Rate, proportion of actual negative instances that are incorrectly classified as
+                            positive by the model used []
+    '''
+
+    TP = np.zeros((true_values.size))
+    FP = np.zeros((true_values.size))
+    FN = np.zeros((true_values.size))
+    TN = np.zeros((true_values.size))
+
+    # determine which category each planet falls into
+    for j in range(true_values.size):
+        if (bound_below == True):
+            if (retrieved_values[j] <= threshold and true_values[j] == 1):
+                TP[j] = 1
+            elif (retrieved_values[j] <= threshold and true_values[j] == 0):
+                FP[j] = 1
+            elif (retrieved_values[j] > threshold and true_values[j] == 1):
+                FN[j] = 1
+            elif (retrieved_values[j] > threshold and true_values[j] == 0):
+                TN[j] = 1
+
+        else:
+            if (retrieved_values[j] >= threshold and true_values[j] == 1):
+                TP[j] = 1
+            elif (retrieved_values[j] >= threshold and true_values[j] == 0):
+                FP[j] = 1
+            elif (retrieved_values[j] < threshold and true_values[j] == 1):
+                FN[j] = 1
+            elif (retrieved_values[j] < threshold and true_values[j] == 0):
+                TN[j] = 1
+
+    # calculate the TPR and the FPR from the existing arrays
+    if (sum(TP) == 0 and sum(FN) == 0):
+        TPR = 0
+    else:
+        TPR = sum(TP)/(sum(TP)+sum(FN))
+
+    if(sum(FP) == 0 and sum(TN) == 0):
+        FPR = 0
+    else:
+        FPR = sum(FP)/(sum(FP)+sum(TN))
+
+    return TP, FP, FN, TN, TPR, FPR

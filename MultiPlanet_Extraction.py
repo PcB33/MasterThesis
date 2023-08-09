@@ -1,6 +1,7 @@
 import numpy as np
 import lifesim as ls
 from Extraction import ML_Extraction
+from Extraction_auxiliary import *
 import operator as op
 import random as ran
 import warnings
@@ -26,6 +27,15 @@ if __name__ == '__main__':
     else:
         ex_bus.data.import_catalog('/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/'
                                    'standard500_scen2_spectrum.hdf5')
+
+    # set the resolution to the required level
+    L_used = ex_bus.data.catalog['planet_flux_use'][0][0].size
+    if (L_used == 31):
+        ex_bus.data.options.set_manual(spec_res=20.)
+    elif (L_used == 77):
+        ex_bus.data.options.set_manual(spec_res=50.)
+    elif (L_used == 154):
+        ex_bus.data.options.set_manual(spec_res=100.)
 
     #add the instrument, transmission, extraction and noise modules and connect them
     instrument = ls.Instrument(name='inst')
@@ -66,8 +76,11 @@ if __name__ == '__main__':
     n_universes = 100
     precision_limit = 1600
 
+    include_dips = True
+    atmospheric_scenario = mix_40
 
-    # define parameters with which to slice your dataset ----------------------------------------------------------------
+
+    # define parameters with which to slice your dataset ---------------------------------------------------------------
     parameters = np.array([
             ['detected', op.eq, 1],
             ['radius_p', op.ge, 0.82],
@@ -100,7 +113,6 @@ if __name__ == '__main__':
             mask = mask.drop(mask[mask['nuniverse'] == i].index)
 
 
-
     print('Number of planets selected:', mask['radius_p'].size)
 
     #save the filtered catalog to the bus
@@ -109,9 +121,11 @@ if __name__ == '__main__':
     #Perform the extraction and save the file as changeme.csv ---------------------------------------------------------
     if (local == True):
         extr.main_parameter_extraction(n_run=1, mu=mu, whitening_limit=whitening_limit, n_processes=n_processes,
-                                            precision_limit=precision_limit, filepath=path+'05_output_files/')
+                                            precision_limit=precision_limit, include_dips=include_dips,
+                                            atmospheric_scenario=atmospheric_scenario, filepath=path+'05_output_files/')
     else:
         extr.main_parameter_extraction(n_run=1, mu=mu, whitening_limit=whitening_limit,  n_processes=n_processes,
-                                            precision_limit=precision_limit, filepath='/home/ipa/quanz/student_theses'
-                                                                                      '/master_theses/2023/binkertp'
-                                                                                      '/MasterThesis/')
+                                            precision_limit=precision_limit, include_dips=include_dips,
+                                            atmospheric_scenario=atmospheric_scenario,
+                                            filepath='/home/ipa/quanz/student_theses/master_theses/2023/binkertp'
+                                                                                                '/MasterThesis/')

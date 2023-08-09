@@ -1,7 +1,5 @@
 import numpy as np
-from Extraction_auxiliary import pol_to_cart_map, plot_planet_SED_and_SNR, plot_multi_map, get_detection_threshold, \
-        get_detection_threshold_max, BB_for_fit, get_Dsqr_mat, pdf_J, cdf_J_precision, cdf_Jmax_precision,\
-        alt_sigma_calc
+from Extraction_auxiliary import *
 from astropy import units as u
 import matplotlib.pyplot as plt
 import scipy as sp
@@ -11,6 +9,7 @@ from tqdm import tqdm
 import multiprocessing as multiprocessing
 import mpmath as mp
 from matplotlib.ticker import ScalarFormatter
+import random as ran
 
 
 class ML_Extraction(ExtractionModule):
@@ -29,6 +28,73 @@ class ML_Extraction(ExtractionModule):
             Name of the module.
         """
         super().__init__(name=name)
+
+
+    def create_dips(self):
+
+        is_dip = np.zeros((self.n_molecules))
+
+        perfect_blackbody_curve = self.single_data_row['planet_flux_use'][0]
+
+        for i in range(is_dip.size):
+
+            randomizer = ran.random()
+
+            # if (randomizer <= self.dip_matrix[i][4]):
+            if (randomizer <= self.atmospheric_scenario.dip_likelihoods[i]):
+                # generate a Gaussian-shaped dip
+                dip_center = self.atmospheric_scenario.dip_centers[i]
+                dip_width = self.atmospheric_scenario.get_width(self.atmospheric_scenario.dip_molecules[i])
+                dip_depth = self.atmospheric_scenario.get_depth(self.atmospheric_scenario.dip_molecules[i])
+
+                gaussian_dip = sp.stats.norm.pdf(self.wl_bins, loc=dip_center, scale=dip_width)
+                gaussian_dip_normalized = gaussian_dip / np.max(gaussian_dip) * \
+                                          self.single_data_row['planet_flux_use'][0][np.abs(self.wl_bins -
+                                                                                            dip_center).argmin()]
+
+                dipped_curve = self.single_data_row['planet_flux_use'][0] - dip_depth * gaussian_dip_normalized
+
+                is_dip[i] = True
+
+                self.single_data_row['planet_flux_use'][0] = dipped_curve
+
+        # calculate the new SNR_ps
+        # this is required so that when you set the index to 'None' calling the next function it takes the right angsep;
+        #   also, you have to reset the baseline
+        self.data.single['angsep'] = self.single_data_row['angsep']
+        self.data.inst['bl'] = self.single_data_row['baseline']
+
+        transm_eff, transm_noise = self.run_socket(s_name='transmission',
+                                                   method='transmission_efficiency',
+                                                   index=None)
+
+        noise_planet = 2 * self.single_data_row['planet_flux_use'][0] * transm_noise
+        noise_tot = noise_planet + self.single_data_row['noise_astro'][0]
+
+        flux_planet = self.single_data_row['planet_flux_use'][0] * transm_eff
+
+        SNR_1h = np.sqrt((flux_planet ** 2 / noise_tot).sum())
+        SNR_ps_new = SNR_1h * np.sqrt(self.single_data_row['int_time'] / 3600)
+
+        if (self.plot == True):
+
+            for i in range(is_dip.size):
+                if (is_dip[i] == True):
+                    print(self.atmospheric_scenario.dip_molecules[i], 'dip induced')
+
+            plt.plot(self.wl_bins * 10 ** 6, perfect_blackbody_curve / self.wl_bin_widths,
+                     label=r'perfect blackbody, $\mathrm{SNR_{ps}} =$' + str(
+                         np.round(self.single_data_row['snr_current'], 1)), color='black')
+            plt.plot(self.wl_bins * 10 ** 6, self.single_data_row['planet_flux_use'][0] / self.wl_bin_widths,
+                     label=r'blackbody with dips, $\mathrm{SNR_{ps}} =$' + str(np.round(SNR_ps_new, 1)), color='red')
+            plt.legend(loc='best')
+            plt.grid()
+            plt.title('Input blackbody curves')
+            plt.xlabel(r"$\lambda$ [$\mu$m]", fontsize=12)
+            plt.ylabel(r"Planet flux $F_\lambda$ [ph $\mathrm{s}^{-1}$m$^{-2}\mu \mathrm{m}^{-1}$]", fontsize=12)
+            plt.show()
+
+        return is_dip, SNR_ps_new
 
 
     def get_B_C(self):
@@ -58,7 +124,6 @@ class ML_Extraction(ExtractionModule):
         # take T twice back to back
         T_exp = np.tile(self.tm_chop, 2)
 
-
         # calculate C; also here, the time series is included
         C = np.empty((n_l, n_r, n_p // 2))
 
@@ -71,7 +136,6 @@ class ML_Extraction(ExtractionModule):
         self.C = (C.T / var).T
 
         return
-
 
 
     def get_B_C_whitened(self):
@@ -94,15 +158,9 @@ class ML_Extraction(ExtractionModule):
         # get variance of received noise (without signal)
         var_noise = np.var(self.noise, axis=1, ddof=1)
 
-        if (self.ideal == True):
-            # if no noise is included, B_noise is obsolete
-            self.B_noise = np.zeros_like(self.B)
-
-        else:
-            # calculate B analogously to before for the new variance
-            B_vec_noise = (self.tm_chop ** 2).sum(axis=-1) / var_noise[:, np.newaxis]
-            self.B_noise = np.repeat(B_vec_noise[:, :, np.newaxis], n_p, axis=2)
-
+        # calculate B analogously to before for the new variance
+        B_vec_noise = (self.tm_chop ** 2).sum(axis=-1) / var_noise[:, np.newaxis]
+        self.B_noise = np.repeat(B_vec_noise[:, :, np.newaxis], n_p, axis=2)
 
         # take T twice back to back
         T_exp = np.tile(self.tm_chop, 2)
@@ -127,7 +185,7 @@ class ML_Extraction(ExtractionModule):
         return
 
 
-    def get_transm_map(self, plot=False):
+    def get_transm_map(self):
         '''
         This function first calculates the transmission function by defining a polar coordinate system and then calling
         the corresponding function from the transmission module
@@ -168,15 +226,14 @@ class ML_Extraction(ExtractionModule):
                                               image_size=self.image_size
                                               )
 
-
         # if applicable, plot the resulting transmission map
-        if (plot == True):
+        if (self.plot == True):
             self.plot_transmissionmap()
 
         # normalize the transmission map to instrument performance (required for compatability with functions written
         #   for the old lifesim version
         self.tm_chop = tm_chop * self.single_data_row['int_time'] / self.n_steps * self.data.inst['telescope_area'] \
-                            * self.data.inst['eff_tot'] * self.wl_bin_widths[:, np.newaxis, np.newaxis] * 10 ** 6
+                       * self.data.inst['eff_tot'] * self.wl_bin_widths[:, np.newaxis, np.newaxis] * 10 ** 6
 
         return
 
@@ -186,13 +243,15 @@ class ML_Extraction(ExtractionModule):
         This function plots the differential transmission maps generated at a suitable wavelength, in cartesian and
         polar coordinates, as well as the modulated planet and total signal for one full rotation of the instrument.
         The calculations are similar as in get_transm_map()
+        Note that if the transmission map does not fill out the entire plot, this means that the part where nothing
+        is shown is outside of the field of view for that wavelength
         '''
 
         # define the plot resolution
         resolution = 1000
 
         # show the plot at 12.3 micron (arbitrary, change as desired)
-        wl_bin = 22
+        wl_bin = int(23 / 31 * self.L)
         wl_value = np.round(self.wl_bins[wl_bin] * 10 ** 6, 1)
 
         # define the cartesian and polar coordinates
@@ -257,8 +316,8 @@ class ML_Extraction(ExtractionModule):
         plt.gca().add_patch(circle)
         plt.title('Linear differential transmission map ($\lambda$=' + str(wl_value) + '$\mu m$)')
         plt.legend(loc='best')
-        plt.xlim((-self.single_data_row['angsep']*1000 * 1.5, self.single_data_row['angsep']*1000 * 1.5))
-        plt.ylim((-self.single_data_row['angsep']*1000 * 1.5, self.single_data_row['angsep']*1000 * 1.5))
+        plt.xlim((-self.single_data_row['angsep'] * 1000 * 1.5, self.single_data_row['angsep'] * 1000 * 1.5))
+        plt.ylim((-self.single_data_row['angsep'] * 1000 * 1.5, self.single_data_row['angsep'] * 1000 * 1.5))
         plt.xlabel('$\Delta$RA [mas]')
         plt.ylabel('$\Delta$Dec [mas]')
         plt.show()
@@ -268,7 +327,7 @@ class ML_Extraction(ExtractionModule):
         Y_pol = np.linspace(0, self.hfov[wl_bin] * 3600000 * 180 / np.pi, resolution)
         levels = np.linspace(-1, 1, 100)
         col_ticks = np.array([-1, -0.5, 0, 0.5, 1])
-        x_ticks = np.array([0,90,180,270,360])
+        x_ticks = np.array([0, 90, 180, 270, 360])
         contour = plt.contourf(X_pol, Y_pol, tm_chop_plot_pol[wl_bin, :, :], cmap='cividis', levels=levels)
         cbar = plt.colorbar(contour, ticks=col_ticks)
         cbar.ax.set_ylabel('Transmission')
@@ -276,14 +335,14 @@ class ML_Extraction(ExtractionModule):
         plt.hlines(self.single_data_row['angsep'] * 1000, xmin=0, xmax=360, linestyles='--', color='black',
                    label='planet')
         plt.legend(loc='best')
-        plt.ylim((0, self.single_data_row['angsep']*1000 * 1.5))
+        plt.ylim((0, self.single_data_row['angsep'] * 1000 * 1.5))
         plt.xlabel('Rotation angle [$^{\circ}$]')
         plt.ylabel('Angular separation $\Theta$ [mas]')
         plt.xticks(x_ticks)
         plt.show()
 
         # plot the modulated signal
-        plt.plot(X_pol, self.signals[wl_bin,:], label='total noisy signal', color='dodgerblue')
+        plt.plot(X_pol, self.signals[wl_bin, :], label='total noisy signal', color='dodgerblue')
         plt.plot(X_pol, self.ideal_signals[wl_bin, :], label='pure planet signal', color='black')
         plt.title('Signal Modulation ($\lambda$=' + str(wl_value) + '$\mu m$)')
         plt.xlabel('Rotation angle [$^{\circ}$]')
@@ -300,7 +359,7 @@ class ML_Extraction(ExtractionModule):
         return
 
 
-    def get_F_estimate(self, mu=0):
+    def get_F_estimate(self):
         '''
         This function calculates the estimated flux received by the planet based on the matrices B and C.
         See LIFE II Appendix B for an explanation of the calculations
@@ -317,7 +376,7 @@ class ML_Extraction(ExtractionModule):
         (n_l, n_r, n_p) = self.C.shape
 
         # if there is no regularization, the calculation can be simplified
-        if (mu == 0):
+        if (self.mu == 0):
 
             # calculation of the total estimated signal (planet signal plus noise)
             F = self.C / self.B
@@ -332,9 +391,8 @@ class ML_Extraction(ExtractionModule):
 
                 B_diags = np.array([np.diag(self.B[:, i, 0]) for i in range(n_r)])  # B is phi-independent
 
-
                 # calculate the inverse of (B+mu*D^2)
-                S = B_diags + mu * Dsqr_mat
+                S = B_diags + self.mu * Dsqr_mat
                 Sinv = np.linalg.inv(S)
 
                 # calculate F and F_pos
@@ -353,11 +411,10 @@ class ML_Extraction(ExtractionModule):
                 F = self.C / self.B
                 F_pos = np.where(F >= 0, F, 0)
 
-
         return F, F_pos
 
 
-    def get_F_estimate_whitened(self, mu=0):
+    def get_F_estimate_whitened(self):
         '''
         This function calculates the estimated flux received by the planet after the signal has been whitened. The
         calculations are analogous to get_F_estimate just using the "whitened" versions of the matrices B&C
@@ -378,7 +435,7 @@ class ML_Extraction(ExtractionModule):
         (n_l, n_r, n_p) = self.C.shape
 
         # if no regularization is included, the calculation is simplified
-        if (mu == 0):
+        if (self.mu == 0):
             F = self.C / self.B
 
             # calculation of the purely noisy signal and the estimated pure planet signal (no noise)
@@ -399,9 +456,9 @@ class ML_Extraction(ExtractionModule):
                 B_diags_noise = np.array([np.diag(self.B_noise[:, i, 0]) for i in range(n_r)])
 
                 # calculate the inverse of (B+mu*D^2)
-                S = B_diags + mu * Dsqr_mat
+                S = B_diags + self.mu * Dsqr_mat
                 Sinv = np.linalg.inv(S)
-                S_noise = B_diags_noise + mu * Dsqr_mat
+                S_noise = B_diags_noise + self.mu * Dsqr_mat
                 Sinv_noise = np.linalg.inv(S_noise)
 
                 # calculate F and F_pos for the noisy and pure signal
@@ -428,12 +485,170 @@ class ML_Extraction(ExtractionModule):
                 F_white = F - F_noise
                 F_white_pos = np.where(F_white >= 0, F_white, 0)
 
-
         return F_white, F_white_pos, F_noise, F_noise_pos
 
 
-    def get_T_R_estimate(self, spectra, sigmas, p0=(300, 1.), absolute_sigma=True, plot_flux=False,
-                         plot_BB=False):
+    def detect_dips(self, spectra, sigmas):
+
+        t_scores = np.empty((self.n_molecules))
+        dip_extracted = np.zeros((self.n_molecules))
+        popts = np.empty((self.n_molecules, 2))
+        pcovs = np.empty((self.n_molecules, 2, 2))
+        perrs = np.empty((self.n_molecules, 2))
+
+        for i in range(t_scores.size):
+
+            # central_dip_bin = np.abs(self.wl_bins - self.dip_center).argmin()
+            central_dip_bin = np.abs(self.wl_bins - self.atmospheric_scenario.dip_centers[i]).argmin()
+            lower_dip_bin = max(0, np.abs(self.wl_bins - (
+                        self.atmospheric_scenario.dip_centers[i] - 2 * self.atmospheric_scenario.dip_avg_widths[
+                    i])).argmin())
+            upper_dip_bin = min(self.L, central_dip_bin + (central_dip_bin - lower_dip_bin))
+            dipped_bins = np.arange(lower_dip_bin, upper_dip_bin + 1)
+
+            truncated_wl_bins_and_distS_array = np.delete(self.wl_bins_and_distS_array, dipped_bins, axis=1)
+            truncated_spectra = np.delete(spectra, dipped_bins, axis=0)
+            truncated_sigmas = np.delete(sigmas, dipped_bins, axis=0)
+
+            # perform the fit of T and R and calculate the uncertainties
+            popts[i], pcovs[i] = sp.optimize.curve_fit(BB_for_fit, xdata=truncated_wl_bins_and_distS_array,
+                                                       ydata=truncated_spectra,
+                                                       sigma=truncated_sigmas, p0=(300, 1.), absolute_sigma=True,
+                                                       maxfev=10000)
+
+            # get the blackbody curve for the estimated parameters
+            Fp_fit = BB_for_fit(self.wl_bins_and_distS_array, popts[i][0], popts[i][1])
+            residuals = spectra - Fp_fit
+
+            truncated_residuals = np.delete(residuals, dipped_bins, axis=0)
+            dip_residuals = residuals[dipped_bins]
+
+            mean_dip_residuals = np.mean(dip_residuals)
+            mean_truncated_residuals_data = np.mean(truncated_residuals)
+            mean_truncated_residuals_true = 0
+
+            std_truncated_residuals = np.std(truncated_residuals)
+
+            dof = dipped_bins.size - 1
+
+            t_statistic = (mean_dip_residuals - mean_truncated_residuals_true) / (
+                    std_truncated_residuals / np.sqrt(dipped_bins.size))
+
+            t_scores[i], _ = sp.integrate.quad(lambda x: t_distribution(x, dof), -np.infty, t_statistic)
+
+            # plot and decide which calculated T to use based on this alpha
+            alpha = 0.01
+
+            if (t_scores[i] < alpha):
+                dip_extracted[i] = True
+
+            if (self.plot == True):
+                critical_value = sp.stats.t.ppf(alpha, dof)
+
+                n_bins = 30
+                max_resid = np.max(np.abs(residuals))
+                residual_array = np.linspace(-max_resid, max_resid, n_bins)
+
+                counts, bin_edges = np.histogram(truncated_residuals, bins=n_bins)
+                area_to_normalize = np.sum(counts * (bin_edges[1] - bin_edges[0]))
+
+                weights_truncated = np.ones_like(truncated_residuals) / area_to_normalize
+                weights_dip = np.ones_like(dip_residuals) / area_to_normalize
+
+                x = np.linspace(-max_resid * 1.2, max_resid * 1.2, 1000)
+
+                norm_hist, _, _ = plt.hist(truncated_residuals, label='on-curve residuals', bins=residual_array,
+                                           weights=weights_truncated, color='green', alpha=0.8)
+                plt.hist(dip_residuals, label='dip residuals', bins=residual_array, weights=weights_dip, color='maroon',
+                         alpha=0.8)
+                plt.plot(x, sp.stats.norm.pdf(x, loc=0, scale=std_truncated_residuals), label='normal distribution',
+                         linewidth=2.5, color='darkblue')
+                plt.axvline(x=mean_truncated_residuals_data, color='black', linestyle='--', label='mean res. on-curve')
+                plt.axvline(x=mean_dip_residuals, color='red', linestyle='--', label='mean res. dip')
+                plt.xlim(-1.2 * max_resid, 1.2 * max_resid)
+                plt.ylim(0, 1.2 * max(norm_hist))
+                plt.title('Histogram of residual planet flux')
+                plt.xlabel(r"residual planet flux $F_\lambda$ [ph $\mathrm{s}^{-1}$m$^{-2}\mu \mathrm{m}^{-1}$]")
+                plt.ylabel('normalized counts []')
+                plt.legend(loc='best')
+                plt.grid()
+                plt.show()
+
+                y = np.linspace(-3 * critical_value, 3 * critical_value, 1000)
+                t_distr = t_distribution(y, dof)
+
+                plt.plot(y, t_distr, label='t-distribution', linewidth=2, color='navy')
+                plt.title('t-distribution')
+                plt.axvline(x=critical_value, color='black', linestyle='--', label='critical value')
+                plt.text(0.015, 0.95, r'$\alpha$=' + str(alpha), transform=plt.gca().transAxes,
+                         bbox=dict(facecolor='white', edgecolor='black', boxstyle='square', pad=0.5))
+                plt.legend(loc='best')
+                plt.grid()
+                plt.show()
+
+        if (np.any(dip_extracted) == True):
+            min_t_score = np.argmin(t_scores)
+
+            popt_extr = popts[min_t_score]
+            pcov_extr = pcovs[min_t_score]
+            perr_extr = perrs[min_t_score]
+
+        else:
+            # add the case for no dips
+            popt_extr, pcov_extr = sp.optimize.curve_fit(BB_for_fit, xdata=self.wl_bins_and_distS_array,
+                                                         ydata=spectra,
+                                                         sigma=sigmas, p0=(300, 1.), absolute_sigma=True,
+                                                         maxfev=10000)
+
+            perr_extr = np.sqrt(np.diag(pcov_extr))
+
+        return t_scores, popt_extr, pcov_extr, perr_extr
+
+
+    def get_likelihood(self, depth, width, molecule, Tp, Rp, spectra, sigmas):
+
+        expected_spectra = self.atmospheric_scenario.expected_spectrum(molecule,
+                                                                       self.wl_bins, self.wl_bins_and_distS_array,
+                                                                       Tp, Rp, width, depth)
+
+        likelihood = np.prod(
+            1 / (np.sqrt(2 * np.pi) * sigmas) * np.exp(-1 / 2 * (spectra - expected_spectra) ** 2 / sigmas ** 2))
+
+        return likelihood
+
+
+    def get_bayes_factors(self, Tp, Rp, spectra, sigmas):
+
+        # calculate the evidence for the ground model (no atmosphere)
+        expected_spectra_ground = BB_for_fit(self.wl_bins_and_distS_array, Tp, Rp)
+
+        evidence_ground = np.prod(
+            1 / (np.sqrt(2 * np.pi) * sigmas) * np.exp(-1 / 2 * (spectra - expected_spectra_ground) ** 2 / sigmas ** 2))
+
+        # calculate the other evidences
+        bayes_factors = np.empty((self.n_molecules))
+
+        for i in range(bayes_factors.size):
+
+            evidence, _ = sp.integrate.dblquad(self.get_likelihood, self.atmospheric_scenario.dip_widths[i][0],
+                                               self.atmospheric_scenario.dip_widths[i][1],
+                                               self.atmospheric_scenario.dip_depths[i][0],
+                                               self.atmospheric_scenario.dip_depths[i][1],
+                                               args=(
+                                               self.atmospheric_scenario.dip_molecules[i], Tp, Rp, spectra, sigmas))
+            norm_factor_depth = 1 / (
+                        self.atmospheric_scenario.dip_depths[i][1] - self.atmospheric_scenario.dip_depths[i][0])
+            norm_factor_width = 1 / (
+                        self.atmospheric_scenario.dip_widths[i][1] - self.atmospheric_scenario.dip_widths[i][0])
+
+            normed_evidence = evidence * norm_factor_depth * norm_factor_width
+
+            bayes_factors[i] = normed_evidence / evidence_ground
+
+        return bayes_factors
+
+
+    def get_T_R_estimate(self, spectra, sigmas):
         '''
         This function obtains the planet temperature and radius by fitting the input spectra and sigmas to blackbody
         curves using scipy.optimize functions
@@ -457,29 +672,32 @@ class ML_Extraction(ExtractionModule):
         # combine the input parameters dist_s and wl_bins into one matrix (required to properly call
         #   sp.optimize.curve_fit())
         dist_s_array = np.full(self.L, self.single_data_row['distance_s'])
-        wl_bins_and_distS_array = np.vstack((self.wl_bins, dist_s_array))
+        self.wl_bins_and_distS_array = np.vstack((self.wl_bins, dist_s_array))
 
-        # perform the fit of T and R and calculate the uncertainties
-        popt, pcov = sp.optimize.curve_fit(BB_for_fit, xdata=wl_bins_and_distS_array, ydata=spectra,
-                                           sigma=sigmas, p0=p0, absolute_sigma=absolute_sigma, maxfev=10000)
+        if (self.include_dips == True):
+            t_score, popt, pcov, perr = self.detect_dips(spectra, sigmas)
+            bayes_factors = self.get_bayes_factors(popt[0], popt[1], spectra, sigmas)
 
-        perr = np.sqrt(np.diag(pcov))
+        else:
+            # perform the fit of T and R and calculate the uncertainties
+            popt, pcov = sp.optimize.curve_fit(BB_for_fit, xdata=self.wl_bins_and_distS_array, ydata=spectra,
+                                               sigma=sigmas, p0=(300, 1.), absolute_sigma=False, maxfev=10000)
+
+            perr = np.sqrt(np.diag(pcov))
+
+            t_score = np.array([1.0])
+            bayes_factors = np.array([0])
 
         # plot the different quantities as defined
-        if (plot_flux == True):
+        if (self.plot == True):
             # get the blackbody curve for the estimated parameters
-            Fp_fit = BB_for_fit(wl_bins_and_distS_array, popt[0], popt[1])
+            Fp_fit = BB_for_fit(self.wl_bins_and_distS_array, popt[0], popt[1])
 
             # in the old version, the snr per wavelength according to photon statistics was saved; this is no longer the
             #   case in the new lifesim version, therefor this option is no longer available. Can be re-implemented if
             #   the data is saved again
             snr_photon_stat = None
-
-            if (plot_BB == True):
-                Fp_BB = Fp_fit
-
-            else:
-                Fp_BB = None
+            Fp_BB = Fp_fit
 
             # get the ideal blackbody flux of the planet
             Fp = black_body(mode='planet',
@@ -493,10 +711,10 @@ class ML_Extraction(ExtractionModule):
             plot_planet_SED_and_SNR(self.wl_bins, Fp, spectra, sigmas, self.min_wl,
                                     self.max_wl, Fp_BB=Fp_BB, snr_photon_stat=snr_photon_stat, filename=None)
 
-        return popt, pcov, perr
+        return popt, pcov, perr, t_score, bayes_factors
 
 
-    def cost_func_MAP(self, mu=0, plot=False):
+    def cost_func_MAP(self):
         '''
         This function calculates the various extracted quantities based on the maximum likelihood method as described
         in LIFE II and the Thesis. In a first step, the auxiliary matrices B&C are calculated, from which the estimated
@@ -532,19 +750,18 @@ class ML_Extraction(ExtractionModule):
         :return R_sigma: float; uncertainty in the extracted planet radius [R_earth]
         '''
 
-
         # calculate the matrices B and C for the signal as recorded (unwhitened)
         self.get_B_C()
 
         # calculate the estimated flux based on the total received signal
-        F, F_pos = self.get_F_estimate(mu=mu)
+        F, F_pos = self.get_F_estimate()
 
         # calculate the cost function and as well as the position of the maximum value of the cost function
         self.J = (F_pos * self.C).sum(axis=0)
         theta_max = np.unravel_index(np.argmax(self.J, axis=None), self.J.shape)
         (r, p) = theta_max
 
-        # determine the true values of r and phi in order to caclulate the value of J at this pixel
+        # determine the true values of r and phi in order to calculate the value of J at this pixel
         true_r = int(self.single_data_row['angsep'] / 2 / self.hfov_cost * self.image_size / 180 / 3600 * np.pi)
         true_phi = 0
 
@@ -552,19 +769,12 @@ class ML_Extraction(ExtractionModule):
         F_est = F[:, r, p]
         F_est_pos = F_pos[:, r, p]
 
-        # calculate the sigma at the position of Jmax
-        if (self.ideal == True):
-            # sigma equal to zero leads to errors in the curve fitting; take very small value instead
-            sigma_est = np.ones((self.L)) * 10 ** (-6)
-
-        else:
-            # calculate sigma at the position of Jmax
-            sigma_est = self.B[:, r, p] ** (-1 / 2)
-
+        # calculate sigma at the position of Jmax
+        sigma_est = self.B[:, r, p] ** (-1 / 2)
 
         # calculate the best fit temperature and radius along with the corresponding uncertainties
         try:
-            popt, pcov, perr = self.get_T_R_estimate(F_est, sigma_est, plot_flux=plot, plot_BB=plot)
+            popt, pcov, perr, t_score, bayes_factors = self.get_T_R_estimate(F_est, sigma_est)
 
         # in very rare instances, the curve fitting does not work; in this case print a warning and continue with the
         #   true values and small uncertainty to avoid the program crashing
@@ -572,7 +782,8 @@ class ML_Extraction(ExtractionModule):
             print('T and R not found')
             popt = np.array([self.single_data_row['temp_p'], self.single_data_row['radius_p']])
             perr = np.array([0.1, 0.1])
-
+            t_score = np.array([1.0])
+            bayes_factors = np.array([0.0])
 
         T_est = popt[0]
         R_est = popt[1]
@@ -588,9 +799,8 @@ class ML_Extraction(ExtractionModule):
         else:
             whitening = False
 
-        if (plot==True):
-            print('Signal whitening: ',whitening)
-
+        if (self.plot == True):
+            print('Signal whitening: ', whitening)
 
         # if applicable, the signal is whitened in the following
         if (whitening == True):
@@ -613,25 +823,21 @@ class ML_Extraction(ExtractionModule):
                                                        lat_s=self.single_data_row['lat'],
                                                        z=self.single_data_row['z'],
                                                        angsep=2 * r * self.hfov_cost / self.image_size
-                                                                            * 180 * 3600 / np.pi,
+                                                              * 180 * 3600 / np.pi,
                                                        flux_planet_spectrum=[self.wl_bins * u.meter,
                                                                              est_flux / self.wl_bin_widths * u.photon /
                                                                              u.second / (u.meter ** 3)],
                                                        integration_time=self.single_data_row['int_time'],
                                                        phi_n=self.n_steps)
 
-
             # calculate the noise by subtracting the (estimated) planet signal from the total signal
-            if (self.ideal == True):
-                self.noise = self.signals - self.ideal_signals
-            else:
-                self.noise = self.signals - self.est_ideal_signal
+            self.noise = self.signals - self.est_ideal_signal
 
             # recalculate the B and C matrices with the whitened signal
             self.get_B_C_whitened()
 
             # recalculate the signals using the whitened noise
-            F_white, F_white_pos, F_noise, F_noise_pos = self.get_F_estimate_whitened(mu=self.mu)
+            F_white, F_white_pos, F_noise, F_noise_pos = self.get_F_estimate_whitened()
 
 
         else:
@@ -640,41 +846,29 @@ class ML_Extraction(ExtractionModule):
             #   quantities in any way
             self.noise = self.signals - self.ideal_signals
             self.get_B_C_whitened()
-            _, _, _, F_noise_pos = self.get_F_estimate_whitened(mu=self.mu)
+            _, _, _, F_noise_pos = self.get_F_estimate_whitened()
 
             # these quantities no longer include ground truth data and are thus set to the un-whitened values
             F_white_pos = F_pos
-            
+
             self.B_noise = self.B
             self.C_noise_var = self.C
-
-
 
         # take the signal at the derived position
         F_white_pos_max = F_white_pos[:, r, p]
 
-        #recalculate the sigma for the whitened noise
-        if (self.ideal == True):
-            # sigma equal to zero leads to errors in the curve fitting; take very small value instead
-            sigma_est = np.ones((self.L)) * 10 ** (-6)
-
-        else:
-            # calculate sigma at the position of Jmax
-            sigma_est = self.B_noise[:, r, p] ** (-1 / 2)
-
+        # recalculate the sigma for the whitened noise
+        sigma_est = self.B_noise[:, r, p] ** (-1 / 2)
 
         # calculate the total SNR over all wavelength bins (method 1)
         SNR_est = np.sum((F_white_pos_max / sigma_est) ** 2) ** (1 / 2)
-
 
         # calculate the cost function using the variance only of the noise
         self.J_FPR = (F_pos * self.C_noise_var).sum(axis=0)
         Jmax = np.max(self.J_FPR)
 
-
         J_true_pos = self.J_FPR[true_r, true_phi]
         J_max_pos = self.J_FPR[r, p]
-
 
         # set the precision to 100 and the false positive rate to one to begin the loop
         precision = 100
@@ -691,7 +885,7 @@ class ML_Extraction(ExtractionModule):
 
         # if the FPR could not be calculated in the step above, set the FPR_sigmas to 10000 for later reference
         if (precision > self.precision_limit):
-            if (plot == True):
+            if (self.plot == True):
                 print('warning: FPR_sigma could not be calculated')
             FPR_sigma = 10000
             FPR_max_sigma = 10000
@@ -711,25 +905,29 @@ class ML_Extraction(ExtractionModule):
             FPR_sigma = alt_sigma_calc(FPR, self.filepath)
             FPR_max_sigma = alt_sigma_calc(FPR_max, self.filepath)
 
-
-        if (plot == True):
+        if (self.plot == True):
             # plot the cost function heatmap
-            j_map = pol_to_cart_map(self.J_FPR,self.image_size)
+            j_map = pol_to_cart_map(self.J_FPR, self.image_size)
             plot_multi_map(j_map, "Cost Value", self.hfov_cost * 3600000 * 180 / np.pi,
-                                "inferno", filename_post=None)
+                           "inferno", filename_post=None)
 
             # calculate the J value one would get by a purely noisy signal
             self.J_noise = (F_noise_pos * self.C_noise_only).sum(axis=0)
 
             # plot a histogram of the values of J (whitened version)
             flat_J = self.J_FPR.flatten()
-            j_array = np.linspace(0, 2*np.max(flat_J), 100)
-            weights_signal = np.ones_like(flat_J) / flat_J.size
+            n_bins = 100
+            j_array = np.linspace(0, 2 * np.max(flat_J), n_bins)
 
             # plot a histogram of the values of J considering only the noisy part of the signal
             flat_J_noise = self.J_noise.flatten()
-            j_array_noise = np.linspace(0, 2*np.max(flat_J_noise), int(10 ** 2))
-            weights_noise = np.ones_like(flat_J_noise)/flat_J_noise.size
+            j_array_noise = np.linspace(0, 2 * np.max(flat_J_noise), n_bins)
+
+            counts_to_norm, bin_edges = np.histogram(flat_J_noise, bins=j_array_noise)
+            area_to_normalize = np.sum(counts_to_norm * (bin_edges[1] - bin_edges[0]))
+
+            weights_noise = np.ones_like(flat_J_noise) / area_to_normalize
+            weights_signal = np.ones_like(flat_J) / area_to_normalize
 
             # calculate the detections threshold values
             eta_5 = get_detection_threshold(self.L, 5)
@@ -748,15 +946,15 @@ class ML_Extraction(ExtractionModule):
             counts_noise, bins_noise, _ = plt.hist(flat_J_noise, j_array_noise, weights=weights_noise,
                                                    label='measured J\u2032\u2032 values noise',
                                                    color='darkblue', rwidth=0.75)
-            plt.plot(j_array_noise,pdf_J2prime,label='p(J\u2032\u2032) theoretical',color='maroon')
+            plt.plot(j_array_noise, pdf_J2prime, label='p(J\u2032\u2032) theoretical', color='maroon')
             plt.title('J\u2032\u2032 pure noisy signal')
             plt.axvline(x=eta_5, color='red', linestyle='--', label='det. thres.')
             plt.legend(loc='best')
             plt.xlabel('Cost function J\u2032\u2032')
             plt.ylabel('Normalized probability density')
             plt.grid()
-            #Uncomment the following line to save plot
-            #plt.savefig(self.filepath+'J_plot1.pdf')
+            # Uncomment the following line to save plot
+            # plt.savefig(self.filepath+'J_plot1.pdf')
             plt.show()
 
             # plot with additionally including the cdfs and the detection threshold for Jmax
@@ -774,34 +972,34 @@ class ML_Extraction(ExtractionModule):
             plt.ylabel('Normalized probability density')
             plt.grid()
             # Uncomment the following line to save plot
-            #plt.savefig(self.filepath+'J_plot2.pdf')
+            # plt.savefig(self.filepath+'J_plot2.pdf')
             plt.show()
 
             # plot additionally showing the histogram of the J'' values of the whitened signal
             counts, bins, _ = plt.hist(flat_J, j_array, weights=weights_signal,
-                                            label='measured J\u2032\u2032 values signal', color='gold', rwidth=0.75)
+                                       label='measured J\u2032\u2032 values signal', color='gold', rwidth=0.75)
             counts_noise, bins_noise, _ = plt.hist(flat_J_noise, j_array_noise, weights=weights_noise,
-                                            label='measured J\u2032\u2032 values noise', color='darkblue', rwidth=0.75)
+                                                   label='measured J\u2032\u2032 values noise', color='darkblue',
+                                                   rwidth=0.75)
             plt.plot(j_array_noise, pdf_J2prime, label='p(J\u2032\u2032) theoretical', color='maroon')
             plt.title('J\u2032\u2032 signal including planet')
             plt.axvline(x=eta_5, color='red', linestyle='--', label='det. thres.')
-            #plt.axvline(x=eta_max_5, color='black', linestyle='--', label='det. thres. max')
+            # plt.axvline(x=eta_max_5, color='black', linestyle='--', label='det. thres. max')
             plt.legend(loc='best')
             plt.xlabel('Cost function J\u2032\u2032')
             plt.ylabel('Normalized probability density')
             plt.grid()
-            plt.xlim((0,1.5*np.max(flat_J)))
-            plt.ylim((0,20*1/(self.image_size/2)**2))
+            plt.xlim((0, 1.5 * np.max(flat_J)))
+            plt.ylim((0, 20 * 1 / (self.image_size / 2) ** 2))
             # Uncomment the following line to save plot
-            #plt.savefig(self.filepath+'J_plot3.pdf')
+            # plt.savefig(self.filepath+'J_plot3.pdf')
             plt.show()
 
+        return Jmax, r, p, F_est, F_est_pos, sigma_est, SNR_est, FPR_sigma, FPR_max_sigma, T_est, T_sigma, \
+            R_est, R_sigma, t_score, bayes_factors
 
-        return Jmax, r, p, F_est, F_est_pos, sigma_est, SNR_est, FPR_sigma, FPR_max_sigma, T_est, T_sigma,\
-                    R_est, R_sigma
 
-
-    def single_spectrum_extraction(self, n_run=1, plot=False):
+    def single_spectrum_extraction(self, n_run=1):
         '''
         This is the core function of the ML_Extraction class that executes the signal extraction for a single planet.
         In each run, the extracted spectrum, snr, sigma, planet positions and parameters are calculated based
@@ -853,11 +1051,21 @@ class ML_Extraction(ExtractionModule):
         Rs_sigma = []
         FPRs = []
         FPR_maxs = []
-
+        induced_dipss = []
+        t_scores = []
+        SNR_ps_news = []
+        bayes_factors = []
 
         for n in range(n_run):
-            if (plot == True):
+            if (self.plot == True):
                 print('run:', n)
+
+            if (self.include_dips == True):
+                induced_dips, SNR_ps_new = self.create_dips()
+
+            else:
+                induced_dips = np.array([0])
+                SNR_ps_new = 0
 
             # get the signals (with and without noise) for the specified constellation
             self.signals, self.ideal_signals = self.run_socket(s_name='instrument',
@@ -876,19 +1084,17 @@ class ML_Extraction(ExtractionModule):
                                                                                          'telescope_area'] /
                                                                                      self.data.inst[
                                                                                          'eff_tot'] / self.wl_bin_widths
-                                                                                            * u.photon / u.second /
-                                                                                            (u.meter ** 3)],
+                                                                                     * u.photon / u.second /
+                                                                                     (u.meter ** 3)],
                                                                integration_time=self.single_data_row['int_time'],
                                                                phi_n=self.n_steps)
 
-
             # create the transmission maps
-            self.get_transm_map(plot=plot)
+            self.get_transm_map()
 
             # extract all the quantities
-            Jmax, r, p, Fp_est, Fp_est_pos, sigma_est, SNR_est, FPR_extr, FPR_max_extr, T_est, T_sigma, R_est,\
-                    R_sigma = self.cost_func_MAP(mu=self.mu, plot=plot)
-
+            Jmax, r, p, Fp_est, Fp_est_pos, sigma_est, SNR_est, FPR_extr, FPR_max_extr, T_est, T_sigma, R_est, \
+                R_sigma, t_score, bayes_factor = self.cost_func_MAP()
 
             # add the quantities from this run to the final list
             extracted_spectra.append(Fp_est)
@@ -903,6 +1109,10 @@ class ML_Extraction(ExtractionModule):
             Rs_sigma.append(R_sigma)
             FPRs.append(FPR_extr)
             FPR_maxs.append(FPR_max_extr)
+            induced_dipss.append(induced_dips)
+            t_scores.append(t_score)
+            SNR_ps_news.append(SNR_ps_new)
+            bayes_factors.append(bayes_factor)
 
         # convert the final lists to arrays
         extracted_spectra = np.array(extracted_spectra)
@@ -917,14 +1127,19 @@ class ML_Extraction(ExtractionModule):
         Rs_sigma = np.array(Rs_sigma)
         FPRs = np.array(FPRs)
         FPR_maxs = np.array(FPR_maxs)
+        induced_dipss = np.array(induced_dipss)
+        t_scores = np.array(t_scores)
+        SNR_ps_news = np.array(SNR_ps_news)
+        bayes_factors = np.array(bayes_factors)
 
-        return extracted_spectra, extracted_snrs, extracted_sigmas, extracted_Jmaxs, rss, phiss, Ts, Ts_sigma, \
-                    Rs, Rs_sigma, FPRs, FPR_maxs
+        return extracted_spectra, extracted_snrs, extracted_sigmas, extracted_Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, \
+            Rs_sigma, FPRs, FPR_maxs, induced_dipss, t_scores, SNR_ps_news, bayes_factors
 
 
     def main_parameter_extraction(self, n_run=1, mu=0, whitening_limit=0, n_processes=1, precision_limit=1600,
-                                        plot=False, ideal=False, single_planet_mode=False, planet_number=0,
-                                        save_mode=True, filepath=None):
+                                  plot=False, single_planet_mode=False, planet_number=0,
+                                  include_dips=False, atmospheric_scenario=None, save_mode=True,
+                                  filepath=None):
         '''
         The main_parameter_extraction function is the function that should get called by other files. In defines all the
         required parameters and then runs single_spectrum_extraction for either one specified planet
@@ -942,7 +1157,6 @@ class ML_Extraction(ExtractionModule):
         :param precision_limit: int; determines the maximum precision the calculation of the false positive rate
                     will use before deeming that it is high enough and set to 10000 []
         :param plot: boolean; determines whether to show plots throughout the runs (only advised for small n_run)
-        :param ideal: boolean; if True, no noise is included in the extraction
         :param single_planet_mode: boolean; if True, signal extraction is performed for only one planet in the catalog
                     as defined by the following parameter
         :param planet_number: integer; index of the planet in the catalog of the bus of which the signal is to be
@@ -972,7 +1186,6 @@ class ML_Extraction(ExtractionModule):
         - 'mu': float; regularization parameter for the calculation of the cost function J as described above []
         - 'whitening_limit': float; threshold above which a signal with SNR=whitening_limit should be whitened []
         - 'n_run': int; number of runs to perform for each planet []
-        - 'ideal': boolean; if True, no noise is included in the extraction []
         - 'precision_limit': int; maximum precision the calculation of the false positive rate []
         - 'filepath': str; path to where the files should be saved
 
@@ -1003,24 +1216,28 @@ class ML_Extraction(ExtractionModule):
         self.mu = mu
         self.whitening_limit = whitening_limit
         self.n_run = n_run
-        self.ideal = ideal
         self.precision_limit = precision_limit
         self.filepath = filepath
+        self.plot = plot
+        self.include_dips = include_dips
+        self.atmospheric_scenario = atmospheric_scenario
+        self.n_molecules = len(self.atmospheric_scenario.dip_molecules)
 
         self.planet_azimuth = 0
         self.n_steps = 360
 
-
-        #if in single_planet_mode, define the planet-specific parameters, run single_spectrum_extraction once and return
+        # if in single_planet_mode, define the planet-specific parameters, run single_spectrum_extraction once and return
         # the extracted parameters
-        if (single_planet_mode==True):
+        if (single_planet_mode == True):
             self.single_data_row = self.data.catalog.iloc[planet_number]
             self.hfov_cost = self.single_data_row['angsep'] * 1.2 / 3600 / 180 * np.pi
 
-            spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma,\
-                FPRs, FPR_maxs = self.single_spectrum_extraction(n_run=n_run, plot=plot)
+            spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs, induced_dips, \
+                t_scores, SNR_ps_news, bayes_factors \
+                = self.single_spectrum_extraction(n_run=n_run)
 
-            return spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs
+            return spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs, \
+                induced_dips, t_scores, SNR_ps_news, bayes_factors
 
 
         # if single_planet_mode=False, proceed here
@@ -1039,23 +1256,25 @@ class ML_Extraction(ExtractionModule):
             extracted_Rs_sigma_tot = []
             extracted_FPRs_tot = []
             extracted_FPR_maxs_tot = []
-
+            extracted_induced_dips_tot = []
+            extracted_t_scores_tot = []
+            extracted_SNR_ps_news_tot = []
+            extracted_bayes_factors_tot = []
 
             # divide the planets into equal ranges for parallel processing
             n_processes = n_processes
             planet_indices = []
 
             for i in range(n_processes):
-                lower_index = int(np.floor(self.n_planets/n_processes*i))
+                lower_index = int(np.floor(self.n_planets / n_processes * i))
                 if (i == n_processes):
                     upper_index = int(self.n_planets)
                 else:
-                    upper_index = int(np.floor(self.n_planets/n_processes*(i+1)))
-                index_range = np.arange(lower_index,upper_index,1)
+                    upper_index = int(np.floor(self.n_planets / n_processes * (i + 1)))
+                index_range = np.arange(lower_index, upper_index, 1)
                 planet_indices.append(index_range)
 
-
-            #define processes, queues and events:
+            # define processes, queues and events:
             #   the processes are the objects which will run the extraction in parallel
             #   the queues are where the processes store their output
             #   the process has an event attributed to it; it's function is to be 'set' when the process is completed so
@@ -1068,16 +1287,14 @@ class ML_Extraction(ExtractionModule):
             for i in range(n_processes):
                 e = multiprocessing.Event()
                 p = multiprocessing.Process(target=self.execute_multiprocessing, args=[planet_indices[i],
-                                                                                    res_queue, num_queue, e, i])
+                                                                                       res_queue, num_queue, e, i])
                 p.start()
                 events.append(e)
                 processes.append(p)
 
-
             # wait for all processes to finish
             for event in events:
                 event.wait()
-
 
             # get the results from the queues and store them in lists. The numbers list is used to keep track of what
             #   order the queues finished in
@@ -1106,8 +1323,10 @@ class ML_Extraction(ExtractionModule):
                 extracted_Rs_sigma_tot.append(results[place_in_queue][9])
                 extracted_FPRs_tot.append(results[place_in_queue][10])
                 extracted_FPR_maxs_tot.append(results[place_in_queue][11])
-
-
+                extracted_induced_dips_tot.append(results[place_in_queue][12])
+                extracted_t_scores_tot.append(results[place_in_queue][13])
+                extracted_SNR_ps_news_tot.append(results[place_in_queue][14])
+                extracted_bayes_factors_tot.append(results[place_in_queue][15])
 
             # add the data to the bus catalog
             self.data.catalog['extracted_spectra'] = sum(extracted_spectra_tot, [])
@@ -1122,11 +1341,14 @@ class ML_Extraction(ExtractionModule):
             self.data.catalog['extracted_Rs_sigma'] = sum(extracted_Rs_sigma_tot, [])
             self.data.catalog['extracted_FPRs'] = sum(extracted_FPRs_tot, [])
             self.data.catalog['extracted_FPR_maxs'] = sum(extracted_FPR_maxs_tot, [])
+            self.data.catalog['extracted_induced_dips'] = sum(extracted_induced_dips_tot, [])
+            self.data.catalog['extracted_t_scores'] = sum(extracted_t_scores_tot, [])
+            self.data.catalog['extracted_SNR_ps_new'] = sum(extracted_SNR_ps_news_tot, [])
+            self.data.catalog['extracted_bayes_factors'] = sum(extracted_bayes_factors_tot, [])
 
             # save the catalog
-            if (save_mode==True):
-                self.data.catalog.to_csv(self.filepath+'changeme.csv')
-
+            if (save_mode == True):
+                self.data.catalog.to_csv(self.filepath + 'changeme.csv')
 
             print('main_parameter_extraction completed')
 
@@ -1159,8 +1381,12 @@ class ML_Extraction(ExtractionModule):
         extracted_Rs_sigma = []
         extracted_FPRs = []
         extracted_FPR_maxs = []
+        extracted_induced_dips = []
+        extracted_t_scores = []
+        extracted_SNR_ps_news = []
+        extracted_bayes_factors = []
 
-        print('Process #',n_process,' started')
+        print('Process #', n_process, ' started')
 
         # loop through all of the planets in the process range
         for j in tqdm(process_range):
@@ -1168,8 +1394,9 @@ class ML_Extraction(ExtractionModule):
             self.hfov_cost = self.single_data_row['angsep'] * 1.2 / 3600 / 180 * np.pi
 
             # call the extraction function for a single planet
-            spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma,\
-                        FPRs, FPR_maxs = self.single_spectrum_extraction(n_run=self.n_run, plot=False)
+            spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs, induced_dips, \
+                t_scores, SNR_ps_news, bayes_factors \
+                = self.single_spectrum_extraction(n_run=self.n_run)
 
             # store the data in the lists
             extracted_spectra.append(spectra.tolist())
@@ -1184,12 +1411,17 @@ class ML_Extraction(ExtractionModule):
             extracted_Rs_sigma.append(Rs_sigma.tolist())
             extracted_FPRs.append(FPRs.tolist())
             extracted_FPR_maxs.append(FPR_maxs.tolist())
+            extracted_induced_dips.append(induced_dips.tolist())
+            extracted_t_scores.append(t_scores.tolist())
+            extracted_SNR_ps_news.append(SNR_ps_news.tolist())
+            extracted_bayes_factors.append(bayes_factors.tolist())
 
         # add the process number and the results to the queue and set the event
         num.put(n_process)
         res.put([extracted_spectra, extracted_snrs, extracted_sigmas, extracted_Jmaxs, extracted_rss,
                  extracted_phiss, extracted_Ts, extracted_Ts_sigma, extracted_Rs, extracted_Rs_sigma, extracted_FPRs,
-                 extracted_FPR_maxs])
+                 extracted_FPR_maxs, extracted_induced_dips, extracted_t_scores,
+                 extracted_SNR_ps_news, extracted_bayes_factors])
         event.set()
         print('Process #', n_process, ' finished')
 
