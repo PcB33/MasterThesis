@@ -1,4 +1,6 @@
 # MasterThesis (from Chapter 2 from the written thesis)
+![image](https://github.com/PcB33/MasterThesis/assets/103758142/e8ab6bee-f652-4900-88bf-c5ffeb4561fb)
+
 The relevant code consists of the following five files. Let again be noted that large parts of Extraction.py as well as some functions in Extraction_auxiliary.py were taken over or adapted from
 the code available for the old LIFEsim version with credit to Dannert et al. (2022) and M. Ottiger
 (2020).
