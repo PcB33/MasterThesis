@@ -8,13 +8,13 @@ import warnings
 
 if __name__ == '__main__':
 
-    # Define whether you are running the file locally or on the server (to define the correct paths)
+    # define whether you are running the file locally or on the server (to define the correct paths)
     local = False
 
-    # Suppress warnings
+    # suppress warnings
     warnings.filterwarnings("ignore", category=UserWarning)
 
-    # create bus --------------------------------------------------------------------------------------------------------
+    # create bus -------------------------------------------------------------------------------------------------------
     ex_bus = ls.Bus()
 
     # set basic scenario
@@ -68,16 +68,41 @@ if __name__ == '__main__':
     instrument.apply_options()
 
 
-    # define variables ------------------------------------------------------------------------------------------------------
-    planet_number = 6
+    # define variables -------------------------------------------------------------------------------------------------
+    planet_number = 23
     n_processes = 40
     n_runs = 10000
 
-    # Perform the extraction and save the file as changeme.csv ---------------------------------------------------------
+    # perform the extraction and save the file as changeme.csv ---------------------------------------------------------
     if (local == True):
-        extr.FPF_test(planet_number=planet_number, n_runs=n_runs, n_processes=n_processes, filepath=path + '05_output_files/')
+        extr.FPF_test(planet_number=planet_number, n_runs=n_runs, n_processes=n_processes, filepath=path +
+                                                                                                    '05_output_files/')
 
     else:
         extr.FPF_test(planet_number=planet_number, n_runs=n_runs, n_processes=n_processes,
+                      filepath='/home/ipa/quanz/student_theses/master_theses/2023/binkertp/MasterThesis/')
+        
+    '''
+    # cluster part -----------------------------------------------------------------------------------------------------
+    planet_numbers = [8, 13, 21, 68, 77, 82, 102, 154, 282, 341, 366, 442, 543, 566, 2798, 7776, 2821, 1966, 1924, 945,
+                        5712, 8094, 1015, 2738, 10383, 8025, 5677]
+    n_runs = 1000
+
+    # perform the extraction and save the file as changeme.csv ---------------------------------------------------------
+    if (local == True):
+        extr.cluster_test(planet_numbers=planet_numbers, n_runs=n_runs,
+                      filepath=path + '05_output_files/')
+
+    else:
+        extr.cluster_test(planet_numbers=planet_numbers, n_runs=n_runs,
                       filepath='/home/ipa/quanz/student_theses/master_theses/2023/binkertp'
-                                                '/MasterThesis/')
+                               '/MasterThesis/')
+
+    
+    angseps = np.empty((len(planet_numbers)))
+    for i in range(len(planet_numbers)):
+        angseps[i] = ex_bus.data.catalog.iloc[planet_numbers[i]]['angsep']
+
+    plt.scatter(angseps, np.ones_like(angseps))
+    plt.show()
+    '''

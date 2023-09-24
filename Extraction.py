@@ -10,6 +10,7 @@ import multiprocessing as multiprocessing
 import mpmath as mp
 from matplotlib.ticker import ScalarFormatter
 import random as ran
+import warnings
 
 
 class ML_Extraction(ExtractionModule):
@@ -31,6 +32,13 @@ class ML_Extraction(ExtractionModule):
 
 
     def create_dips(self):
+        '''
+        This function creates dips in the planet blackbody spectrum based on the self.atmospheric_scenario attributes
+
+        :return isdip: np.ndarray of size n_molecules; denotes for each molecule whether a corresponding dip was
+                        induced []
+        :return SNR_ps_new: float; new SNR_ps value for the planet after a potential dip was induced []
+        '''
 
         is_dip = np.zeros((self.n_molecules))
 
@@ -190,7 +198,10 @@ class ML_Extraction(ExtractionModule):
         This function first calculates the transmission function by defining a polar coordinate system and then calling
         the corresponding function from the transmission module
 
-        :param plot: boolean; determines whether to show plot of the transmission function
+        Attributes
+        ----------------
+        - self.tm_chop: np.ndarray of shape (L, self.radial_ang_pix, self.n_steps); contains the transmission function
+                            values for each point in the transmission map
         '''
 
         # define the azimuthal coordinates
@@ -209,7 +220,7 @@ class ML_Extraction(ExtractionModule):
 
         for i in range(self.L):
             phi_mat_wl[i, :, :] = phi_mat
-            theta_mat_wl[i, :, :] = theta_mat * self.hfov_cost
+            theta_mat_wl[i, :, :] = theta_mat * self.field_of_search
 
         # define the input parameters for the transmission function
         d_alpha = theta_mat_wl * np.cos(phi_mat_wl)
@@ -222,7 +233,7 @@ class ML_Extraction(ExtractionModule):
                                               direct_mode=True,
                                               d_alpha=d_alpha,
                                               d_beta=d_beta,
-                                              hfov=self.hfov_cost,
+                                              hfov=self.field_of_search,
                                               image_size=self.image_size
                                               )
 
@@ -287,7 +298,7 @@ class ML_Extraction(ExtractionModule):
                                                        direct_mode=True,
                                                        d_alpha=x_mat_wl,
                                                        d_beta=y_mat_wl,
-                                                       hfov=self.hfov_cost,
+                                                       hfov=self.field_of_search,
                                                        image_size=self.image_size
                                                        )
 
@@ -297,7 +308,7 @@ class ML_Extraction(ExtractionModule):
                                                        direct_mode=True,
                                                        d_alpha=d_alpha_plot,
                                                        d_beta=d_beta_plot,
-                                                       hfov=self.hfov_cost,
+                                                       hfov=self.field_of_search,
                                                        image_size=self.image_size
                                                        )
 
@@ -364,8 +375,6 @@ class ML_Extraction(ExtractionModule):
         This function calculates the estimated flux received by the planet based on the matrices B and C.
         See LIFE II Appendix B for an explanation of the calculations
 
-        :param mu: float; regularization parameter []
-
         :return F: np.ndarray of shape (L,radial_ang_px); total estimated flux (planet plus noise) received for each
                     wl bin at every pixel in the image in [photons]
         :return F_pos: np.ndarray of shape (L,radial_ang_px); positive part of total estimated flux received for each
@@ -418,8 +427,6 @@ class ML_Extraction(ExtractionModule):
         '''
         This function calculates the estimated flux received by the planet after the signal has been whitened. The
         calculations are analogous to get_F_estimate just using the "whitened" versions of the matrices B&C
-
-        :param mu: float; regularization parameter []
 
         :return F_white: np.ndarray of shape (L,radial_ang_px); estimated planet flux (no noise) received for each
                     wl bin at every pixel in the image in [photons]
@@ -489,22 +496,43 @@ class ML_Extraction(ExtractionModule):
 
 
     def detect_dips(self, spectra, sigmas):
+        '''
+        This function calculates the t-scores of potential dip detections according to t-statistics for each of the
+        molecules considered. Additionally, the curve fit is performed excluding the band range where a dip has
+        presumabely been detected
 
+        :param spectra: np.ndarray of size L; contains the extracted planet flux in each wl-bin in [photons]
+        :param sigmas: np.ndarray of size L; contains the sigmas of the extracted planet flux in each wl-bin [photons]
+
+        :return t_scores: np.ndarray of size n_molecules; contains the t-score values for each of the
+                        considered molecules []
+        :return popt_extr: optimal values for (T,R) such that the sum of the squared residuals to the
+                        blackbody curve is minimized [K,R_earth]
+        :return pcov: np.ndarray of shape (2,2); covariance matrix of the obtained popt, a measure of uncertainty.
+                        Dimensions [K^2] and [R_earth^2] on the first and second diagonal element
+        :return perr: np.ndarray of size 2; standard deviation of the errors on T and R [K,R_earth]
+        '''
+
+        # initialize matrices
         t_scores = np.empty((self.n_molecules))
         dip_extracted = np.zeros((self.n_molecules))
         popts = np.empty((self.n_molecules, 2))
         pcovs = np.empty((self.n_molecules, 2, 2))
         perrs = np.empty((self.n_molecules, 2))
 
+        # loop through all molecules considered
         for i in range(t_scores.size):
 
-            # central_dip_bin = np.abs(self.wl_bins - self.dip_center).argmin()
+            # calculate the bin numbers which would be affected by the dip
             central_dip_bin = np.abs(self.wl_bins - self.atmospheric_scenario.dip_centers[i]).argmin()
             lower_dip_bin = max(0, np.abs(self.wl_bins - (
                         self.atmospheric_scenario.dip_centers[i] - 2 * self.atmospheric_scenario.dip_avg_widths[
                     i])).argmin())
             upper_dip_bin = min(self.L, central_dip_bin + (central_dip_bin - lower_dip_bin))
             dipped_bins = np.arange(lower_dip_bin, upper_dip_bin + 1)
+
+            if (dipped_bins.size <= 1):
+                dipped_bins = np.array([central_dip_bin-1,central_dip_bin,central_dip_bin+1])
 
             truncated_wl_bins_and_distS_array = np.delete(self.wl_bins_and_distS_array, dipped_bins, axis=1)
             truncated_spectra = np.delete(spectra, dipped_bins, axis=0)
@@ -515,6 +543,7 @@ class ML_Extraction(ExtractionModule):
                                                        ydata=truncated_spectra,
                                                        sigma=truncated_sigmas, p0=(300, 1.), absolute_sigma=True,
                                                        maxfev=10000)
+
 
             # get the blackbody curve for the estimated parameters
             Fp_fit = BB_for_fit(self.wl_bins_and_distS_array, popts[i][0], popts[i][1])
@@ -577,6 +606,7 @@ class ML_Extraction(ExtractionModule):
                 y = np.linspace(-3 * critical_value, 3 * critical_value, 1000)
                 t_distr = t_distribution(y, dof)
 
+
                 plt.plot(y, t_distr, label='t-distribution', linewidth=2, color='navy')
                 plt.title('t-distribution')
                 plt.axvline(x=critical_value, color='black', linestyle='--', label='critical value')
@@ -606,6 +636,21 @@ class ML_Extraction(ExtractionModule):
 
 
     def get_likelihood(self, depth, width, molecule, Tp, Rp, spectra, sigmas):
+        '''
+        This function calculates the likelihood function according to Bayesian model statistics, see the written thesis
+
+        :param depth: float; depth of the wavelength dip induced by each molecule as a fraction of the blackbody curve
+                                of the planet []
+        :param width: float; depth of the wavelength dip induced by each molecule as a fraction of the blackbody curve
+                                of the planet []
+        :param molecule: str; name of the molecule considered
+        :param Tp: float; planet temperature [K]
+        :param Rp: float; planet radius [R_earth]
+        :param spectra: np.ndarray of size L; contains the extracted planet flux in each wl-bin in [photons]
+        :param sigmas: np.ndarray of size L; contains the sigmas of the extracted planet flux in each wl-bin [photons]
+
+        :return likelihood: float; likelihood function as calculated with the input parameters []
+        '''
 
         expected_spectra = self.atmospheric_scenario.expected_spectrum(molecule,
                                                                        self.wl_bins, self.wl_bins_and_distS_array,
@@ -618,6 +663,17 @@ class ML_Extraction(ExtractionModule):
 
 
     def get_bayes_factors(self, Tp, Rp, spectra, sigmas):
+        '''
+        This function calculates the Bayes factor K for each of the molecules considered. See the written thesis for
+        the theoretical derivations of the calculations
+
+        :param Tp: float; planet temperature [K]
+        :param Rp: float; planet radius [R_earth]
+        :param spectra: np.ndarray of size L; contains the extracted planet flux in each wl-bin in [photons]
+        :param sigmas: np.ndarray of size L; contains the sigmas of the extracted planet flux in each wl-bin [photons]
+
+        :return bayes_factors: np.ndarray of size self.n_molecules; contains the Bayes factors K []
+        '''
 
         # calculate the evidence for the ground model (no atmosphere)
         expected_spectra_ground = BB_for_fit(self.wl_bins_and_distS_array, Tp, Rp)
@@ -625,11 +681,11 @@ class ML_Extraction(ExtractionModule):
         evidence_ground = np.prod(
             1 / (np.sqrt(2 * np.pi) * sigmas) * np.exp(-1 / 2 * (spectra - expected_spectra_ground) ** 2 / sigmas ** 2))
 
-        # calculate the other evidences
+
+        # calculate the evidences for each of the molecules
         bayes_factors = np.empty((self.n_molecules))
 
         for i in range(bayes_factors.size):
-
             evidence, _ = sp.integrate.dblquad(self.get_likelihood, self.atmospheric_scenario.dip_widths[i][0],
                                                self.atmospheric_scenario.dip_widths[i][1],
                                                self.atmospheric_scenario.dip_depths[i][0],
@@ -643,7 +699,15 @@ class ML_Extraction(ExtractionModule):
 
             normed_evidence = evidence * norm_factor_depth * norm_factor_width
 
-            bayes_factors[i] = normed_evidence / evidence_ground
+            # for extreme values, set to +/-100 to avoid runtime issues
+            with warnings.catch_warnings():
+                warnings.filterwarnings("error")
+                try:
+                    bayes_factors[i] = normed_evidence / evidence_ground
+                except RuntimeWarning:
+                    bayes_factors[i] = 100
+                except RuntimeError:
+                    bayes_factors[i] = 100
 
         return bayes_factors
 
@@ -655,18 +719,15 @@ class ML_Extraction(ExtractionModule):
 
         :param spectra: np.ndarray of size L; contains the extracted planet flux in each wl-bin in [photons]
         :param sigmas: np.ndarray of size L; contains the sigmas of the extracted planet flux in each wl-bin [photons]
-        :param p0: tuple; initial values for the optimization for T and R in [K,R_earth]
-        :param absolute_sigma: boolean; if True, sigma is used in an absolute sense and the estimated covariance
-                    reflects these absolute values. If False, only the relative magnitudes of the sigma values matter
-        :param plot_flux: boolean; determines whether to plot at all. If True, automatically plots the spectra
-        :param plot_BB: boolean; determines whether to plot the fitted blackbody curve. Only applicable
-                    if plot_flux=True
 
         :return popt: np.ndarray of size 2; optimal values for (T,R) such that the sum of the squared residuals to the
                         blackbody curve is minimized. In [T,R_earth]
         :return pcov: np.ndarray of shape (2,2); covariance matrix of the obtained popt, a measure of uncertainty.
                         Dimensions [T^2] and [R_earth^2] on the first and second diagonal element
         :return perr: np.ndarray of size 2; standard deviation of the errors on T and R. In [T,R_earth]
+        :return t_score: np.ndarray of size n_molecules; contains the t-score values for each of the
+                        considered molecules []
+        :return bayes_factors: np.ndarray of size self.n_molecules; contains the Bayes factors K []
         '''
 
         # combine the input parameters dist_s and wl_bins into one matrix (required to properly call
@@ -707,6 +768,7 @@ class ML_Extraction(ExtractionModule):
                             radius=self.single_data_row['radius_p'],
                             distance=self.single_data_row['distance_s']) / self.wl_bin_widths * 10 ** -6
 
+
             # plot the measured fluxes as well as the best fit and true blackbody curve
             plot_planet_SED_and_SNR(self.wl_bins, Fp, spectra, sigmas, self.min_wl,
                                     self.max_wl, Fp_BB=Fp_BB, snr_photon_stat=snr_photon_stat, filename=None)
@@ -724,10 +786,6 @@ class ML_Extraction(ExtractionModule):
         is obtained), i.e. the process is repeated but taking the variance only of the noise as opposed to the whole
         signal. Using the whitened signal, the SNR is calculated according to three different methods as described in
         the Thesis
-
-        :param mu: float; regularization parameter []
-        :param plot: boolean; determines whether to plot the cost function heatmap, the blackbody plot and the different
-                                J'' histogram plots
 
         :return Jmax: float; maximum cost function value (of all pixels) []
         :return r: float; radial coordinate of the maximum cost function value in [radial pixel]
@@ -748,6 +806,9 @@ class ML_Extraction(ExtractionModule):
         :return T_sigma: float; uncertainty in the extracted planet temperature [K]
         :return R_est: float; extracted planet radius in [R_earth]
         :return R_sigma: float; uncertainty in the extracted planet radius [R_earth]
+        :return t_score: np.ndarray of size n_molecules; contains the t-score values for each of the
+                        considered molecules []
+        :return bayes_factors: np.ndarray of size self.n_molecules; contains the Bayes factors K []
         '''
 
         # calculate the matrices B and C for the signal as recorded (unwhitened)
@@ -762,7 +823,7 @@ class ML_Extraction(ExtractionModule):
         (r, p) = theta_max
 
         # determine the true values of r and phi in order to calculate the value of J at this pixel
-        true_r = int(self.single_data_row['angsep'] / 2 / self.hfov_cost * self.image_size / 180 / 3600 * np.pi)
+        true_r = int(self.single_data_row['angsep'] / 2 / self.field_of_search * self.image_size / 180 / 3600 * np.pi)
         true_phi = 0
 
         # calculate the estimated flux at the position of Jmax (total and positive part)
@@ -822,7 +883,7 @@ class ML_Extraction(ExtractionModule):
                                                        distance_s=self.single_data_row['distance_s'],
                                                        lat_s=self.single_data_row['lat'],
                                                        z=self.single_data_row['z'],
-                                                       angsep=2 * r * self.hfov_cost / self.image_size
+                                                       angsep=2 * r * self.field_of_search / self.image_size
                                                               * 180 * 3600 / np.pi,
                                                        flux_planet_spectrum=[self.wl_bins * u.meter,
                                                                              est_flux / self.wl_bin_widths * u.photon /
@@ -867,7 +928,12 @@ class ML_Extraction(ExtractionModule):
         self.J_FPR = (F_pos * self.C_noise_var).sum(axis=0)
         Jmax = np.max(self.J_FPR)
 
-        J_true_pos = self.J_FPR[true_r, true_phi]
+        # if the true position of the planet is outside of the FoS, set J_true_pos to zero
+        if (true_r <= self.radial_ang_px-1):
+            J_true_pos = self.J_FPR[true_r, true_phi]
+        else:
+            J_true_pos = 0
+
         J_max_pos = self.J_FPR[r, p]
 
         # set the precision to 100 and the false positive rate to one to begin the loop
@@ -879,7 +945,7 @@ class ML_Extraction(ExtractionModule):
         #   precision, double the precision and try again
         while ((FPR == 1.0 or FPR_max == 1.0) and precision <= self.precision_limit):
             FPR = cdf_J_precision(self.L, J_true_pos, precision)
-            FPR_max = cdf_Jmax_precision(self.L, J_max_pos, precision, self.radial_ang_px)
+            FPR_max = cdf_Jmax_precision(self.L, J_max_pos, precision, self.single_data_row['angsep'])
 
             precision *= 2
 
@@ -908,8 +974,9 @@ class ML_Extraction(ExtractionModule):
         if (self.plot == True):
             # plot the cost function heatmap
             j_map = pol_to_cart_map(self.J_FPR, self.image_size)
-            plot_multi_map(j_map, "Cost Value", self.hfov_cost * 3600000 * 180 / np.pi,
+            plot_multi_map(j_map, "Cost Value", self.field_of_search * 3600000 * 180 / np.pi,
                            "inferno", filename_post=None)
+
 
             # calculate the J value one would get by a purely noisy signal
             self.J_noise = (F_noise_pos * self.C_noise_only).sum(axis=0)
@@ -931,7 +998,7 @@ class ML_Extraction(ExtractionModule):
 
             # calculate the detections threshold values
             eta_5 = get_detection_threshold(self.L, 5)
-            eta_max_5 = get_detection_threshold_max(self.L, 5, self.image_size / 2)
+            eta_max_5 = get_detection_threshold_max(self.L, 5, self.single_data_row['angsep'])
 
             # calculate the theoretical pdf and cdf of the J'' function
             pdf_J2prime = pdf_J(self.L, j_array_noise)
@@ -940,7 +1007,7 @@ class ML_Extraction(ExtractionModule):
 
             for i in range(j_array_noise.size):
                 cdf_J2prime[i] = cdf_J_precision(self.L, j_array_noise[i], 100)
-                cdf_Jmax[i] = cdf_Jmax_precision(self.L, j_array_noise[i], 100, self.radial_ang_px)
+                cdf_Jmax[i] = cdf_Jmax_precision(self.L, j_array_noise[i], 100, self.single_data_row['angsep'])
 
             # plot with the noisy values, p(J'') and the detection threshold
             counts_noise, bins_noise, _ = plt.hist(flat_J_noise, j_array_noise, weights=weights_noise,
@@ -1014,8 +1081,7 @@ class ML_Extraction(ExtractionModule):
         The signal is then whitened and the signal-to-noise ratio is calculated with three different methods (as
         described in the Thesis). All the quantities of the run are finally saved in a list
 
-        :param n_run: integer; number of runs to perform
-        :param plot: boolean; determines whether to show plots throughout the runs (only advised for small n_run)
+        :param n_run: integer; number of runs to perform []
 
         :return extracted spectra: np.ndarray of shape (n_run,L); contains the extracted spectra per wavelength bin for
                         each of the runs in [photons]
@@ -1037,6 +1103,14 @@ class ML_Extraction(ExtractionModule):
                         planet for every run in [number of sigmas] when taking the true position
         :return FPR_maxs: np.ndarray of size n_run; contains the extracted false positive detection rate for the
                         extracted planet for every run in [number of sigmas] when taking the maximum position
+        :return induced_dipss: np.ndarray of shape (n_runs,n_molecules); denotes for each molecule whether a
+                        corresponding dip was induced in each run []
+        :return t_scores: np.ndarray of shape (n_runs,n_molecules); contains the t-score values for each of the
+                        considered molecules in each run []
+        :return SNR_ps_news: np.ndarray of size n_runs; new SNR_ps values for the planet after a potential dip
+                        was induced for each run []
+        :return bayes_factors: np.ndarray of shape (n_runs,n_molecules); contains the Bayes factors K for each
+                        molecule in each run []
         '''
 
         extracted_spectra = []
@@ -1101,7 +1175,7 @@ class ML_Extraction(ExtractionModule):
             extracted_snrs.append(SNR_est)
             extracted_sigmas.append(sigma_est)
             extracted_Jmaxs.append(Jmax)
-            rss.append(2 * r * self.hfov_cost / self.image_size * 180 * 3600 / np.pi)
+            rss.append(2 * r * self.field_of_search / self.image_size * 180 * 3600 / np.pi)
             phiss.append(p * self.n_steps / 360)
             Ts.append(T_est)
             Rs.append(R_est)
@@ -1137,7 +1211,7 @@ class ML_Extraction(ExtractionModule):
 
 
     def main_parameter_extraction(self, n_run=1, mu=0, whitening_limit=0, n_processes=1, precision_limit=1600,
-                                  plot=False, single_planet_mode=False, planet_number=0,
+                                  max_FoS=False, plot=False, single_planet_mode=False, planet_number=0,
                                   include_dips=False, atmospheric_scenario=None, save_mode=True,
                                   filepath=None):
         '''
@@ -1151,23 +1225,29 @@ class ML_Extraction(ExtractionModule):
         :param n_run: int; number of runs to perform for each planet []
         :param mu: float; regularization parameter for the calculation of the cost function J as described in
                     section 3.1 of LIFE II []
+        :param whitening_limit: float; threshold above which a signal with SNR=whitening_limit should be whitened []
         :param n_processes: int; number of processes to run in parallel for multi-planet extraction (ignored if
                     single_planet_mode=True) []
-        :param whitening_limit: float; threshold above which a signal with SNR=whitening_limit should be whitened []
         :param precision_limit: int; determines the maximum precision the calculation of the false positive rate
                     will use before deeming that it is high enough and set to 10000 []
+        :param max_FoS: boolean; if True, the extraction is performed using the maximum FoS, i.e. 10x the outer
+                    habitable zone angular separation. Otherwise, the outer habitable zone is used
         :param plot: boolean; determines whether to show plots throughout the runs (only advised for small n_run)
         :param single_planet_mode: boolean; if True, signal extraction is performed for only one planet in the catalog
                     as defined by the following parameter
         :param planet_number: integer; index of the planet in the catalog of the bus of which the signal is to be
                     extracted. Only applicable if single_planet_mode=True
+        :param include_dips: boolean; if True, atmospheric dips are included, otherwise perfect blackbodies are assumed
+        :param atmospheric scenario: class object; determines which atmospheric scenario initialized in
+                    Extraction_auxiliary.py is used. Only applicable if include_dips = True
         :param save_mode: boolean; if True, the catalog with added columns for the extracted parameters will be saved
                     in path/changeme.csv. Only applicable if single_planet_mode=False
         :param filepath: str; path to where the the file will be saved (only applicable if save_mode=True and
                     single_planet_mode=False)
 
-        :return spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma; Only applicable if
-                    single_planet_mode=True, else nothing is returned. See single_spectrum_extraction for description
+        :return spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs, induced_dips,
+                    t_scores, SNR_ps_news, bayes_factors; Only applicable if single_planet_mode=True, else nothing
+                    is returned. See single_spectrum_extraction for description
 
         Attributes
         -----------
@@ -1187,7 +1267,12 @@ class ML_Extraction(ExtractionModule):
         - 'whitening_limit': float; threshold above which a signal with SNR=whitening_limit should be whitened []
         - 'n_run': int; number of runs to perform for each planet []
         - 'precision_limit': int; maximum precision the calculation of the false positive rate []
+        - 'max_FoS': boolean; determines whether to use the maximum FoS or not
         - 'filepath': str; path to where the files should be saved
+        - 'plot': boolean; determines whether to generate plots during the extraction
+        - 'include_dips': boolean; determines whether to include dips in the blackbody spectra caused by molecules
+        - 'atmospheric scenario': class object; determines the atmospheric scenario to be used if required
+        - 'n_molecules': int; number of molecular dips considered
 
         Two attributes concerning the angular dimensioning of the image:
         - 'planet_azimuth': Angular position of the planet on the image. Contrary to the radial position, which is
@@ -1199,9 +1284,8 @@ class ML_Extraction(ExtractionModule):
 
         The following attributes are planet-specific and must be redefined for each new planet:
         - 'single_data_row': pd.series; catalog data from the bus corresponding to the planet described by planet_number
-        - 'hfov_cost': float; Half field of view used for the calculation of the cost map in [radian]. This value is set
-                            based upon the true value; in practise, a grid search will have to be performed to ensure
-                            that the value is greater than the actual separation and for optimal performance
+        - 'field_of_search': float; Half field of view used for the calculation of the cost map in [radian]. This value
+                            is set based upon the outer habitable zone angular separation and the value of max_FoS
         '''
 
         self.n_planets = len(self.data.catalog.index)
@@ -1217,6 +1301,7 @@ class ML_Extraction(ExtractionModule):
         self.whitening_limit = whitening_limit
         self.n_run = n_run
         self.precision_limit = precision_limit
+        self.max_FoS = max_FoS
         self.filepath = filepath
         self.plot = plot
         self.include_dips = include_dips
@@ -1226,11 +1311,18 @@ class ML_Extraction(ExtractionModule):
         self.planet_azimuth = 0
         self.n_steps = 360
 
-        # if in single_planet_mode, define the planet-specific parameters, run single_spectrum_extraction once and return
-        # the extracted parameters
+        # if in single_planet_mode, define the planet-specific parameters, run single_spectrum_extraction once and
+        #   return the extracted parameters
         if (single_planet_mode == True):
             self.single_data_row = self.data.catalog.iloc[planet_number]
-            self.hfov_cost = self.single_data_row['angsep'] * 1.2 / 3600 / 180 * np.pi
+            if (self.max_FoS == True):
+                #self.field_of_search = 0.3 * np.pi / 3600 / 180
+                self.field_of_search = 10 * self.single_data_row['hz_out'] / self.single_data_row['distance_s'] * \
+                                       np.pi / 3600 / 180
+            else:
+                self.field_of_search = self.single_data_row['hz_out'] / self.single_data_row['distance_s'] * np.pi / \
+                                       3600 / 180
+
 
             spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs, induced_dips, \
                 t_scores, SNR_ps_news, bayes_factors \
@@ -1391,7 +1483,12 @@ class ML_Extraction(ExtractionModule):
         # loop through all of the planets in the process range
         for j in tqdm(process_range):
             self.single_data_row = self.data.catalog.iloc[j]
-            self.hfov_cost = self.single_data_row['angsep'] * 1.2 / 3600 / 180 * np.pi
+            if (self.max_FoS == True):
+                # self.field_of_search = 0.3 * np.pi / 3600 / 180
+                self.field_of_search = 10 * self.single_data_row['hz_out'] / self.single_data_row[
+                    'distance_s'] * np.pi / 3600 / 180
+            else:
+                self.field_of_search = self.single_data_row['hz_out'] / self.single_data_row['distance_s'] * np.pi / 3600 / 180
 
             # call the extraction function for a single planet
             spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs, induced_dips, \

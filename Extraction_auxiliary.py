@@ -16,7 +16,7 @@ class Atmospheric_scenarios:
     but rather by how deep a Gaussian dip they induce into the planet atmosphere
     '''
 
-    def __init__(self, name, likelihood_CO2, likelihood_O3, likelihood_H2O):
+    def __init__(self, name, likelihood_CO2, likelihood_O3, likelihood_H2O, spread):
         '''
         This function initializes an instance of the class
 
@@ -24,29 +24,35 @@ class Atmospheric_scenarios:
         :param likelihood_CO2: float; assumed fraction of the planets in the universe that contain CO_2
         :param likelihood_O3: float; assumed fraction of the planets in the universe that contain O_3
         :param likelihood_H2O: float; assumed fraction of the planets in the universe that contain H_2O
+        :param spread: float; determines the fraction with which the values for dip_widths and dip_depths can deviate
+                        from the mean
 
         Attributes:
         ----------------
         - 'name': str; name of the atmospheric scenario
         - 'dip_molecules': list; all molecules that could be included in the scenario (as strings)
         - 'dip_centers': list; center of the wavelength dip induced by each molecule in [micron]
+        - 'dip_avg_widths': list; average widths of the wavelength dip induced by each molecule in [microns]
         - 'dip_widths': list; width of the wavelength dip induced by each molecule in [micron]. Given as a np.array with
                                 minimum and maximum wavelength over which the width is uniformly selected
-        - 'dip_avg_widths': list; average widths of the wavelength dip induced by each molecule in [microns]
+        - 'dip_avg_depths': list; average depth of the wavelength dip induced by each molecule as a fraction []
         - 'dip_depths': list; depth of the wavelength dip induced by each molecule as a fraction of the blackbody curve
                                 of the planet []. Given as a np.array with minimum and maximum fraction over which
                                 the depth is uniformly selected
-        - 'dip_avg_depths': list; average depth of the wavelength dip induced by each molecule as a fraction []
         - 'dip_likelihoods': list; assumed fractions of the planets containing each molecule []
         '''
 
         self.name = name
         self.dip_molecules = [r'$CO_2$', r'$O_3$', r'$H_2O$']
         self.dip_centers = [15*10**-6, 9.7*10**-6, 6.5*10**-6]
-        self.dip_widths = [np.array([0.5*10**-6,1.5*10**-6]), np.array([0.1*10**-6,0.3*10**-6]), np.array([0.4*10**-6, 1.0*10**-6])]
-        self.dip_avg_widths = [1.0*10**-6, 0.2*10**-6, 0.7*10**-6]
-        self.dip_depths = [np.array([0.2,0.7]), np.array([0.2,0.7]), np.array([0.2,0.7])]
+        self.dip_avg_widths = [1.0 * 10 ** -6, 0.2 * 10 ** -6, 0.7 * 10 ** -6]
+        self.dip_widths = [np.array([(1.0-spread*1.0)*10**-6,(1.0+spread*1.0)*10**-6]),
+                           np.array([(0.2-spread*0.2)*10**-6,(0.2+spread*0.2)*10**-6]),
+                           np.array([(0.7-spread*0.7)*10**-6,(0.7+spread*0.7)*10**-6])]
         self.dip_avg_depths = [0.45, 0.45, 0.45]
+        self.dip_depths = [np.array([0.45-spread*0.45,0.45+spread*0.45]),
+                           np.array([0.45-spread*0.45,0.45+spread*0.45]),
+                           np.array([0.45-spread*0.45,0.45+spread*0.45])]
         self.dip_likelihoods = [likelihood_CO2, likelihood_O3, likelihood_H2O]
 
         pass
@@ -75,8 +81,8 @@ class Atmospheric_scenarios:
 
         :param molecule: str; molecule in question of which to determine the depth
 
-        :return: float; selected depth of the wavelength dip induced by the molecule for the planet as a fraction of
-                            the blackbody curve of the planet []
+        :return depth: float; selected depth of the wavelength dip induced by the molecule for the planet as a fraction
+                            of the blackbody curve of the planet []
         '''
 
         index = self.dip_molecules.index(molecule)
@@ -118,11 +124,17 @@ class Atmospheric_scenarios:
 
 
 # define the atmospheric scenarios
-only_CO2 = Atmospheric_scenarios('only CO2', 1.0, 0.0, 0.0)
-only_O3 = Atmospheric_scenarios('only O3', 0.0, 1.0, 0.0)
-only_H2O = Atmospheric_scenarios('only H2O', 0.0, 0.0, 1.0)
-mix_40 = Atmospheric_scenarios('mix 40', 0.4, 0.4, 0.4)
-#ToDo make a scenario with realistic likelihoods based on the occurences in our solar system (or see if you can find something in the Internet)
+only_CO2 = Atmospheric_scenarios('only CO2', 1.0, 0.0, 0.0, 0.5)
+only_O3 = Atmospheric_scenarios('only O3', 0.0, 1.0, 0.0, 0.5)
+only_H2O = Atmospheric_scenarios('only H2O', 0.0, 0.0, 1.0, 0.5)
+mix_40 = Atmospheric_scenarios('mix 40', 0.4, 0.4, 0.4, 0.5)
+
+Earth_like = Atmospheric_scenarios('Earth-like', 0.8, 0.5, 0.5, 0.001)
+Earth_like_loose = Atmospheric_scenarios('Earth-like loose', 0.8, 0.5, 0.5, 0.25)
+Earth_like_veryloose = Atmospheric_scenarios('Earth-like very loose', 0.8, 0.5, 0.5, 0.5)
+
+Jupiter_like = Atmospheric_scenarios('Jupiter-like', 0.6, 0.3, 0.6, 0.5)
+
 
 
 def get_ratio_safe(list):
@@ -161,7 +173,7 @@ def cdf_J(L, J):
     return cdf
 
 
-def cdf_Jmax(L, J, radial_ang_px):
+def cdf_Jmax(L, J, angsep):
     '''
     This function calculates the cumulative distribution function for the cost function J'' when factoring in that the
     maximum pixel is selected as described in Thesis. It calls upon the cdf_J and raises it to the power of the number
@@ -169,13 +181,17 @@ def cdf_Jmax(L, J, radial_ang_px):
 
     :param L: int; number of wavelength bins []
     :param J: float; value of the cost function []
-    :param radial_ang_px: int; number of pixels in the radial direction of the image (=image_size/2) []
+    :param angsep: float; angular separation of the field of search [arcsec]
 
     :return cdf_Jmax: float; Cumulative probability density of sum of L bins of the chi-squared distribution when
-                                selecting the maximum pixel []
+                                selecting the maximum position cluster []
     '''
 
-    cdf_Jmax = cdf_J(L, J)**(radial_ang_px**2)
+    # get the number of clusters from the empirical fit
+    n_clusters = get_clusters_read(angsep)
+
+    # calculate the cdf suing this number of clusters
+    cdf_Jmax = cdf_J(L, J)**n_clusters
 
     return cdf_Jmax
 
@@ -225,7 +241,7 @@ def cdf_J_precision(L, J, precision):
     return cdf
 
 
-def cdf_Jmax_precision(L, J, precision, radial_ang_px):
+def cdf_Jmax_precision(L, J, precision, angsep):
     '''
     This function calculates the cumulative distribution function for the cost function J'' when factoring in that the
     maximum pixel is selected as described in Thesis. It calls upon the cdf_J_precision and raises it to the power of
@@ -235,13 +251,17 @@ def cdf_Jmax_precision(L, J, precision, radial_ang_px):
     :param L: int; number of wavelength bins []
     :param J: mpmath_object; value of the cost function []
     :param precision: int; degree of precision used by mpmath []
-    :param radial_ang_px: int; number of pixels in the radial direction of the image (=image_size/2) []
+    :param angsep: float; angular separation of the field of search [arcsec]
 
     :return cdf_Jmax: mpmath_object; Cumulative probability density of sum of L bins of the chi-squared distribution
                                         when selecting the maximum pixel []
     '''
 
-    cdf_Jmax = cdf_J_precision(L, J, precision)**(radial_ang_px**2)
+    # get the number of clusters from the empirical fit
+    n_clusters = get_clusters_read(angsep)
+
+    # calculate the cdf suing this number of clusters
+    cdf_Jmax = cdf_J_precision(L, J, precision)**n_clusters
 
     return cdf_Jmax
 
@@ -301,13 +321,14 @@ def get_detection_threshold(L, sigma):
     return eta_threshold_sigma
 
 
-def get_detection_threshold_max(L, sigma, radial_ang_pix):
+def get_detection_threshold_max(L, sigma, angsep):
     '''
     This function calculates the threshold above which one can be certain to 'sigma' sigmas that a detection is not
     a false positive. See LIFE II section 3.2 for a detailed description
 
     :param L: int; Number of wavelength bins as given by the wavelength range and the resolution parameter R []
     :param sigma: float; # of sigmas outside of which a false positive must lie []
+    :param angsep: float; angular separation of the field of search [arcsec]
 
     :return eta_threshold_sigma: float; threshold is terms of the cost function J []
     '''
@@ -318,7 +339,7 @@ def get_detection_threshold_max(L, sigma, radial_ang_pix):
     # calculate the cdf values for each element in the eta-linspace
     cdf = np.empty_like(eta)
     for i in range(eta.size):
-        cdf[i] = cdf_Jmax(L, eta[i], radial_ang_pix)
+        cdf[i] = cdf_Jmax(L, eta[i], angsep)
 
     # find the threshold value eta
     eta_ind_sigma = np.searchsorted(cdf, sp.stats.norm.cdf(sigma))
@@ -332,7 +353,7 @@ def BB_for_fit(wl_and_distS, Tp, Rp):
     This function calculates the flux received at Earth from an object with radius Rp radiating at temperature T,
     at distance dist_s and at wavelengths wl
 
-    :param wl: np.ndarray of size L; wavelength bins in [m]
+    :param wl_and_distS: np.ndarray of shape (L,2); wavelength bins and distance to host star (constant) in [m,pc]
     :param Tp: float; planet temperature in [K]
     :param Rp: float; planet radius in [R_earth]
 
@@ -355,6 +376,14 @@ def BB_for_fit(wl_and_distS, Tp, Rp):
 
 
 def t_distribution(x,dof):
+    '''
+    Calculates the Student's t-distribution for a given input
+
+    :param x: np.dnarray of variable size; input quantity (here usually J'') []
+    :param dof: int; degrees of freedom of th distribution []
+
+    :return t_distr: np.dnarray of variable size; t-distribution values for at each position x
+    '''
     t_distr = sp.stats.t.pdf(x=x,df=dof)
 
     return t_distr
@@ -392,7 +421,7 @@ def cartesian2polar_for_map(outcoords, inputshape):
     :param outcoords: format of the output coordinates
     :param inputshape: shape of the input coordinates
 
-    :return (r,phi): tuple; indices r and phi of the output polar map
+    :return (r,phi_index): tuple; indices r and phi of the output polar map
     '''
 
     y, x = outcoords
@@ -448,6 +477,7 @@ def plot_planet_SED_and_SNR(wl_bins, Fp, Fp_est, sigma, wl_min, wl_max, Fp_BB=No
     fig, ax = plt.subplots()
 
     ax.plot(wl_bins * 1e6, Fp, color="mediumblue", linestyle="-", label="True spectrum")
+
 
     if snr_photon_stat is not None:
         ax.fill_between(wl_bins * 1e6, Fp * (1 - 1 / snr_photon_stat), Fp * (1 + 1 / snr_photon_stat),
@@ -637,3 +667,56 @@ def get_rates(retrieved_values, true_values, threshold, bound_below):
         FPR = sum(FP)/(sum(FP)+sum(TN))
 
     return TP, FP, FN, TN, TPR, FPR
+
+
+def get_clusters(j_map):
+    '''
+    This function calculates the number of clusters obtained defined as the number of minima and maxima. No longer
+    actually used in the final version, as the parameter n was fitted directly
+
+    :param j_map: np.ndarray of shape (radial_ang_pixels,n_steps); cost function values in each element []
+
+    :return clusters: int; number of clusters calculated []
+    '''
+
+    local_maxima = 0
+    local_minima = 0
+
+    # loop through each pixel and determine if it is a local maximum or minimum by comparing to its four neighbors
+    for l in range(1, j_map.shape[0] - 1):
+        for k in range(1, j_map.shape[1] - 1):
+            neighborhood = j_map[l - 1:l + 2, k - 1:k + 2]
+
+            if (j_map[l, k] == np.max(neighborhood) and j_map[l, k] > 0 and np.all(neighborhood != 0)):
+                local_maxima += 1
+            if (j_map[l, k] == np.min(neighborhood) and j_map[l, k] > 0 and np.all(neighborhood != 0)):
+                local_minima += 1
+
+    clusters = local_maxima + local_minima
+
+    return clusters
+
+
+def get_clusters_read(angsep):
+    '''
+    This function returns the value n according to the empirical fit performed in evaluate_Jmax_runs.py. See the
+    written thesis for a detailed explanation
+
+    :param angsep: float; angular separation of the field of search [arcsec]
+
+    :return clusters: float; number of clusters (abstractly) n as determined by the fit
+    '''
+
+    # fitted parameters
+    fit_parameters_below = [1054093, -7422, 38]
+    fit_parameters_above = [118019, -1735]
+
+    threshold = 0.05
+
+    # determine the value of n based on the angular separation
+    if (angsep < threshold):
+        clusters = fit_parameters_below[0] * angsep**2 + fit_parameters_below[1] * angsep + fit_parameters_below[2]
+    else:
+        clusters = fit_parameters_above[0] * angsep + fit_parameters_above[1]
+
+    return clusters

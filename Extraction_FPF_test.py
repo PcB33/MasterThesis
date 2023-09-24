@@ -10,6 +10,7 @@ import multiprocessing as multiprocessing
 import mpmath as mp
 from matplotlib.ticker import ScalarFormatter
 import random as ran
+import signal
 
 
 class ML_Extraction(ExtractionModule):
@@ -30,7 +31,7 @@ class ML_Extraction(ExtractionModule):
         super().__init__(name=name)
 
 
-    def get_B_C(self):
+    def get_B_C(self, signals):
         '''
         This functions calculates two matrices that aid in the calculation of the cost function J and the estimated
         planet flux based on the received signal and the transmission functions. See Appendix B of LIFE II for an
@@ -48,7 +49,7 @@ class ML_Extraction(ExtractionModule):
         (n_l, n_r, n_p) = self.tm_chop.shape
 
         # get variance of received signals
-        var = np.var(self.signals, axis=1, ddof=1)
+        var = np.var(signals, axis=1, ddof=1)
 
         # calculate B; in this step, the time series is included by the np.repeat function
         B_vec = (self.tm_chop ** 2).sum(axis=-1) / var[:, np.newaxis]
@@ -62,7 +63,7 @@ class ML_Extraction(ExtractionModule):
 
         for i in range(n_p // 2):
             T_i = T_exp[:, :, n_p - i: 2 * n_p - i]
-            C[:, :, i] = np.einsum("ij,ikj->ik", self.signals, T_i)
+            C[:, :, i] = np.einsum("ij,ikj->ik", signals, T_i)
 
         # use antisymmetry of C to speed up calculation
         C = np.concatenate((C, -C), axis=2)
@@ -174,12 +175,27 @@ class ML_Extraction(ExtractionModule):
 
         return F, F_pos
 
-
+    # not required
     def single_spectrum_extraction(self):
         pass
 
+    def timeout_handler(self):
+        print('timeout triggered')
+        return
+
 
     def FPF_test(self, planet_number=0, n_runs=1, n_processes=1, filepath=None):
+        '''
+        This function runs random noise simulations to determine how many false positives will be obtained. It is the
+        equivalent of the main_parameter_extraction function in Extraction.py
+
+        :param planet_number: integer; index of the planet in the catalog of the bus of which the signal is to be
+                    extracted
+        :param n_runs: int; number of runs to perform for each planet []
+        :param n_processes: int; number of processes to run in parallel for multi-planet extraction (ignored if
+                    single_planet_mode=True) []
+        :param filepath: str; path to where the file will be saved
+        '''
 
         # define attributes
         self.L = self.data.inst['wl_bins'].size
@@ -196,39 +212,193 @@ class ML_Extraction(ExtractionModule):
         self.planet_azimuth = 0
         self.n_steps = 360
 
+        if (n_runs == 1):
+            self.plot = True
+        else:
+            self.plot = False
 
-        # new part ----------------------------------------------------------------------------------------------------
         self.single_data_row = self.data.catalog.iloc[planet_number]
         self.hfov_cost = self.single_data_row['angsep'] * 1.2 / 3600 / 180 * np.pi
+
 
         # create the transmission maps
         self.get_transm_map()
 
+        # get signal (cancel the input signal to zero by multiplying by 0)
+        self.noise = self.run_socket(s_name='instrument',
+                                method='get_signal',
+                                temp_s=self.single_data_row['temp_s'],
+                                radius_s=self.single_data_row['radius_s'],
+                                distance_s=self.single_data_row['distance_s'],
+                                lat_s=self.single_data_row['lat'],
+                                z=self.single_data_row['z'],
+                                angsep=self.single_data_row['angsep'],
+                                flux_planet_spectrum=[self.wl_bins * u.meter,
+                                                      0 * self.single_data_row[
+                                                          'planet_flux_use'][
+                                                          0] / 3600 /
+                                                      self.data.inst[
+                                                          'telescope_area'] /
+                                                      self.data.inst[
+                                                          'eff_tot'] / self.wl_bin_widths
+                                                      * u.photon / u.second /
+                                                      (u.meter ** 3)],
+                                integration_time=self.single_data_row['int_time'],
+                                phi_n=self.n_steps)
+
 
         # begin multiprocessing part
+        extracted_Jmaxs_tot = multiprocessing.Manager().list()
+        extracted_clusters_tot = multiprocessing.Manager().list()
+        n_planets_per_process = int(n_runs/n_processes)
+
+        processes = []
+
+
+        print('beginning random sampling')
+        all_signals = []
+
+        # create random signals
+        for i in range(n_processes):
+            signals_in_process = []
+            for j in range(n_planets_per_process):
+                signal = np.random.poisson(lam=self.noise) - np.random.poisson(lam=self.noise)
+                signals_in_process.append(signal)
+            all_signals.append(signals_in_process)
+        print('random sampling completed')
+
+        # execute the multiprocessing
+        for i in range(n_processes):
+            p = multiprocessing.Process(target=self.execute_multiprocessing, args=[all_signals[i], i,
+                                                                   extracted_Jmaxs_tot, extracted_clusters_tot])
+            processes.append(p)
+
+            p.start()
+
+        # wait for all processes to finish
+        for process in processes:
+            process.join(timeout=n_planets_per_process*2)
+
+        print('saving file')
+
+        extracted_Jmaxs_tot = np.array(extracted_Jmaxs_tot)
+        extracted_clusters_tot = np.array(extracted_clusters_tot)
+
+        # save results
+        np.savetxt(filepath+'changeme_Jmaxs.csv', extracted_Jmaxs_tot, delimiter=',')
+        np.savetxt(filepath + 'changeme_clusters.csv', extracted_clusters_tot, delimiter=',')
+        print('files saved')
+
+        print('Jmax runs completed')
+
+        return
+
+
+    def execute_multiprocessing(self, signals_in_process, n_process, extracted_Jmaxs_tot, extracted_clusters_tot):
+        '''
+        This function is called by each of the parallel running processes and executes the signal extraction for the
+        planets in its range
+
+        :param signals_in_process: np.array of size n_planets_per_process; contains the signals that the process
+                                    should use [photons]
+        :param n_process: int; indicates the process number [0, n_processes] (label-like)
+        :param extracted_Jmaxs_tot: list object of the multiprocessing library; to be filled with the Jmax values
+                                    extracted []
+        :param: extracted_clusters_tot; list object of the multiprocessing library; to be filled with the number of
+                                    cluster values extracted []
+        '''
+
+        print('Process #', n_process, ' started')
+
+        for j in tqdm(range(len(signals_in_process))):
+
+            single_signal = signals_in_process[j]
+
+            # get B and C
+            self.get_B_C(signals=single_signal)
+
+            # get the estimated flux
+            F, F_pos = self.get_F_estimate()
+
+            # get the cost function J
+            J = (F_pos * self.C).sum(axis=0)
+            Jmax = np.max(J)
+
+            j_map = pol_to_cart_map(J, self.image_size)
+            clusters = get_clusters(j_map)
+
+            if (self.plot == True):
+                # plot the cost function heatmap
+                plot_multi_map(j_map, "Cost Value", self.hfov_cost * 3600000 * 180 / np.pi,
+                               "inferno", filename_post=None)
+
+                print('Number of clusters:', clusters)
+
+            extracted_Jmaxs_tot.append(Jmax)
+            extracted_clusters_tot.append(clusters)
+
+        print('Process #', n_process, ' finished')
+
+        return
+
+
+    def cluster_test(self, planet_numbers=[0], n_runs=1, filepath=None):
+        '''
+        This function calculates the number of clusters required to best fit the Jmax cdf function for a list of
+        planets. It is the equivalent of the main_parameter_extraction function in Extraction.py
+
+        :param planet_numbers: list of variable length; indices of the planets in the catalog of the bus of which the
+                    algorithm is to be run
+        :param n_runs: int; number of runs to perform for each planet []
+        :param filepath: str; path to where the file will be saved
+        '''
+
+        # define attributes
+        self.L = self.data.inst['wl_bins'].size
+        self.min_wl = self.data.inst['wl_bin_edges'][0]
+        self.max_wl = self.data.inst['wl_bin_edges'][-1]
+        self.wl_bins = self.data.inst['wl_bins']
+        self.wl_bin_widths = self.data.inst['wl_bin_widths']
+        self.image_size = self.data.options.other['image_size']
+        self.radial_ang_px = int(self.image_size / 2)
+        self.hfov = self.data.inst['hfov']
+        self.mu = 0
+        self.filepath = filepath
+
+        self.planet_azimuth = 0
+        self.n_steps = 360
+
+        self.n_runs = n_runs
+
+
+        # begin multiprocessing part
+        n_processes = len(planet_numbers)
+
         extracted_Jmaxs_tot = []
+        extracted_clusters_tot = []
+        extracted_angseps_tot = []
 
         processes = []
         events = []
         res_queue = multiprocessing.Queue()
         num_queue = multiprocessing.Queue()
 
-        n_planets_per_process = int(n_runs/n_processes)
-
-
         for i in range(n_processes):
             e = multiprocessing.Event()
-            p = multiprocessing.Process(target=self.execute_multiprocessing, args=[n_planets_per_process,
+            p = multiprocessing.Process(target=self.execute_cluster_multiprocessing, args=[planet_numbers[i],
                                                                                    res_queue, num_queue, e, i])
             p.start()
             events.append(e)
             processes.append(p)
+
 
         # wait for all processes to finish
         for event in events:
             event.wait()
 
 
+        # get the results from the queues and store them in lists. The numbers list is used to keep track of what
+        #   order the queues finished in
         results = []
         numbers = []
 
@@ -239,65 +409,103 @@ class ML_Extraction(ExtractionModule):
             numbers.append(number)
 
 
+        # add the results to the main list in the correct order
         for i in range(n_processes):
             place_in_queue = int(numbers.index(i))
 
             extracted_Jmaxs_tot.append(results[place_in_queue][0])
+            extracted_clusters_tot.append(results[place_in_queue][1])
+            extracted_angseps_tot.append(results[place_in_queue][2])
 
-        extracted_Jmaxs_tot = np.array(extracted_Jmaxs_tot)
+        extracted_Jmaxs_tot = np.array(extracted_Jmaxs_tot).T
+        extracted_clusters_tot = np.array(extracted_clusters_tot).T
+        extracted_angseps_tot = np.concatenate((np.array(extracted_angseps_tot), np.array(extracted_angseps_tot)))
 
+        data = np.concatenate((extracted_Jmaxs_tot, extracted_clusters_tot), axis=1)
+        columns = [str(angsep) for angsep in extracted_angseps_tot]
 
-        np.savetxt(filepath+'changeme.csv', extracted_Jmaxs_tot, delimiter=',')
-        print('Jmax runs completed')
+        final_df = pd.DataFrame(data, columns=columns)
+
+        final_df.to_csv(filepath+'changeme.csv', index=False)
+
+        print('cluster extraction completed')
 
         return
 
 
-    def execute_multiprocessing(self, n_planets_per_process, res, num, event, n_process):
 
-        extracted_Jmaxs = []
+    def execute_cluster_multiprocessing(self, planet_number, res, num, event, n_process):
+        '''
+        This function is called by each of the parallel running processes and executes the signal extraction for the
+        planets in its range
+
+        :param planet_number: integer; index of the planet in the catalog of the bus of which the signal is to be
+                                        extracted. Only applicable if single_planet_mode=True
+        :param res: multiprocessing.Queue; this is where the results are stored
+        :param num: multiprocessing.Queue; keeps track of the order in which the processes fill up the results queue
+        :param event: multiprocessing.Event; this object is 'set' as soon as the process is complete
+        :param n_process: int; indicates the process number [0, n_processes] (label-like)
+        '''
 
         print('Process #', n_process, ' started')
 
-        for j in tqdm(range(n_planets_per_process)):
+        self.single_data_row = self.data.catalog.iloc[planet_number]
+        self.hfov_cost = self.single_data_row['angsep'] * 1.2 / 3600 / 180 * np.pi
 
-            #get signal (cancel the input signal to zero by multiplying by 0)
-            self.signals, self.ideal_signals = self.run_socket(s_name='instrument',
-                                                               method='get_signal',
-                                                               temp_s=self.single_data_row['temp_s'],
-                                                               radius_s=self.single_data_row['radius_s'],
-                                                               distance_s=self.single_data_row['distance_s'],
-                                                               lat_s=self.single_data_row['lat'],
-                                                               z=self.single_data_row['z'],
-                                                               angsep=self.single_data_row['angsep'],
-                                                               flux_planet_spectrum=[self.wl_bins * u.meter,
-                                                                                     0*self.single_data_row[
-                                                                                         'planet_flux_use'][
-                                                                                         0] / 3600 /
-                                                                                     self.data.inst[
-                                                                                         'telescope_area'] /
-                                                                                     self.data.inst[
-                                                                                         'eff_tot'] / self.wl_bin_widths
-                                                                                     * u.photon / u.second /
-                                                                                     (u.meter ** 3)],
-                                                               integration_time=self.single_data_row['int_time'],
-                                                               phi_n=self.n_steps)
+        # create the transmission maps
+        self.get_transm_map()
+
+        # get signal (cancel the input signal to zero by multiplying by 0)
+        self.noise = self.run_socket(s_name='instrument',
+                                     method='get_signal',
+                                     temp_s=self.single_data_row['temp_s'],
+                                     radius_s=self.single_data_row['radius_s'],
+                                     distance_s=self.single_data_row['distance_s'],
+                                     lat_s=self.single_data_row['lat'],
+                                     z=self.single_data_row['z'],
+                                     angsep=self.single_data_row['angsep'],
+                                     flux_planet_spectrum=[self.wl_bins * u.meter,
+                                                           0 * self.single_data_row[
+                                                               'planet_flux_use'][
+                                                               0] / 3600 /
+                                                           self.data.inst[
+                                                               'telescope_area'] /
+                                                           self.data.inst[
+                                                               'eff_tot'] / self.wl_bin_widths
+                                                           * u.photon / u.second /
+                                                           (u.meter ** 3)],
+                                     integration_time=self.single_data_row['int_time'],
+                                     phi_n=self.n_steps)
+
+        extracted_Jmaxs = []
+        extracted_clusters = []
+
+        for _ in tqdm(range(self.n_runs)):
+
+            signal = np.random.poisson(lam=self.noise) - np.random.poisson(lam=self.noise)
 
             # get B and C
-            self.get_B_C()
+            self.get_B_C(signals=signal)
 
             # get the estimated flux
             F, F_pos = self.get_F_estimate()
 
             # get the cost function J
-            self.J = (F_pos * self.C).sum(axis=0)
-            Jmax = np.max(self.J)
+            J = (F_pos * self.C).sum(axis=0)
+            Jmax = np.max(J)
+
+            j_map = pol_to_cart_map(J, self.image_size)
+            clusters = get_clusters(j_map)
 
             extracted_Jmaxs.append(Jmax)
+            extracted_clusters.append(clusters)
 
+
+        # add the process number and the results to the queue and set the event
         num.put(n_process)
-        res.put([extracted_Jmaxs])
+        res.put([extracted_Jmaxs, extracted_clusters, self.single_data_row['angsep']])
         event.set()
+
         print('Process #', n_process, ' finished')
 
         return

@@ -3,23 +3,24 @@ import numpy as np
 from auxiliary import path
 from Extraction import ML_Extraction
 
-#create bus
+# create bus
 bus=ls.Bus()
 
-#set basic scenario and make potential changes with .set_manual
+# set basic scenario and make potential changes with .set_manual
 bus.data.options.set_scenario('baseline')
-#bus.data.options.set_manual(diameter=4.)
+# bus.data.options.set_manual(diameter=4.)
 
-#import ppop data to bus
-#bus.data.catalog_from_ppop(input_path=path+'04_input_files/ppop_catalog_10.txt')
-bus.data.catalog_from_ppop(input_path=path+'04_input_files/ppop_catalog_500.fits')
+# import ppop data to bus
+bus.data.catalog_from_ppop(input_path=path+'04_input_files/ppop_catalog_10.txt')
+#bus.data.catalog_from_ppop(input_path=path+'04_input_files/ppop_catalog_500.fits')
+#bus.data.catalog_from_ppop(input_path=path+'04_input_files/Input_Vania.txt')
 
-#remove potential stars from the bus; removing A stars and (M stars > 10parsec) is assumed in the standard scenarios 1&2
+# remove potential stars from the bus; removing A stars and (M stars > 10parsec) is assumed in the standard scenarios 1&2
 bus.data.catalog_remove_distance(stype='A', mode='larger', dist=0.)
 bus.data.catalog_remove_distance(stype='M', mode='larger', dist=10.)
 
 
-#add the instrument, transmission and noise modules and connect them
+# add the instrument, transmission and noise modules and connect them
 instrument = ls.Instrument(name='inst')
 bus.add_module(instrument)
 
@@ -48,7 +49,7 @@ bus.connect(('extr', 'inst'))
 bus.connect(('extr', 'transm'))
 
 
-#add and connect the optimizer and ahgs modules
+# add and connect the optimizer and ahgs modules
 opt = ls.Optimizer(name='opt')
 bus.add_module(opt)
 ahgs = ls.AhgsModule(name='ahgs')
@@ -59,14 +60,14 @@ bus.connect(('inst', 'opt'))
 bus.connect(('opt', 'ahgs'))
 
 
-#run simulation (this is where the stuff happens) ---------------------------------------------
-#get SNR for 1 hour for every planet created by PPOP
+# run simulation (this is where the stuff happens) --------------------------------------------------------------------
+# get SNR for 1 hour for every planet created by PPOP
 instrument.get_snr(save_mode=True)
 
-#optimize the search phase; set ...['habitable'] to True/False to optimize for # of planets in habitable zone
+# optimize the search phase; set ...['habitable'] to True/False to optimize for # of planets in habitable zone
 bus.data.options.optimization['habitable'] = True
 opt.ahgs()
 
-#saving the results
+# save the results
 bus.data.export_catalog(output_path=path+'05_output_files/changeme.hdf5')
 bus.data.catalog.to_csv(path+'05_output_files/changeme.csv')

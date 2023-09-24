@@ -6,36 +6,43 @@ from Extraction_auxiliary import *
 import corner as corner
 from matplotlib.patches import Arrow, Circle, Ellipse
 
-#define variables ------------------------------------------------------------------------------------------------------
-file = 'run_dips/EEC_multiextraction_dips_R100_mix_40.csv'
+# define variables -----------------------------------------------------------------------------------------------------
+file = 'run_final_dips/dipextraction_EEC_earthlikeveryloose_R50.csv'
+label = 'Rocky eHZ'    #singular, e.g. 'Hot Subneptune'
 angsep_accuracy_def = 0.15
 phi_accuracy_def = 10
 true_phi = 0
-#Define according to what SNR method to filter for detected should be made (== 1, 2, 3); this SNR is also used in the corner plot
+# define according to what SNR method to filter for detected should be made (== 1, 2, 3);
+#   this SNR is also used in the corner plot
 defining_criteria = 3
+SNR_threshold = 7
 
 
-#load the input file, calculate some required variables and define empty lists of quantities to be stored --------------
+# load the input file, calculate some required variables and define empty lists of quantities to be stored -------------
 extracted_data = pd.read_csv(path+'/05_output_files/multiextraction/'+file)
 n_planets = len(extracted_data.index)
 
+# set the number of bins and the image size
 L = len(eval(extracted_data['extracted_spectra'][0])[0])
-radial_ang_px = 128
-eta_threshold_5 = get_detection_threshold(L, 5)
-eta_threshold_max_5 = get_detection_threshold_max(L, 5, radial_ang_px)
+image_size = 256
 
+# define the list of molecules to be analyzed
 molecules_list = [r'$CO_2$', r'$O_3$', r'$H_2O$']
 #molecules_list = [r'$CO_2$']
+#molecules_list = []
+
 if (eval(extracted_data['extracted_SNR_ps_new'][0])[0] == 0):
     n_molecules = 0
 else:
     n_molecules = len(molecules_list)
+
+# set thresholds for the two classification models
 strong_alpha = 0.09
 decisive_alpha = 0.01
 strong_jeffrey = 1.0
 decisive_jeffrey = 2.0
 
-
+# initialize variables
 total_fails = 0
 snr_limit_fails = 0
 position_fails = 0
@@ -44,9 +51,11 @@ ang_fails = 0
 FPR_calc_fails = 0
 successes = 0
 
+# this value will later be overwritten
 smallest_SNR_ps = 10000
 
-#SNRs: SNR_ratios_1 -> Naive approach; SNR_ratios_2 -> Approach J true position; SNR_ratios_3 -> Approach J max position
+# these lists will be filled with the values of detected planets according to the criteria set. SNRs:
+#   SNR_ratios_1 -> Naive approach; SNR_ratios_2 -> Approach J true position; SNR_ratios_3 -> Approach J max position
 SNR_ps_used = []
 SNR_ratios_1 = []
 SNR_ratios_2 = []
@@ -60,15 +69,21 @@ induced_dips = []
 SNR_dips_used = []
 t_scores = []
 bayes_factors = []
+true_angseps = []
+radial_pixels = []
 
 
-#go through all of the values and add the desired quantities to the lists ----------------------------------------------
+# go through all of the values and add the desired quantities to the lists ---------------------------------------------
 for i in range(n_planets):
+
+    # extract values from input file
     snr_ps = extracted_data['snr_current'][i]
     true_angsep = extracted_data['angsep'][i]
     true_phi = true_phi
     true_T = extracted_data['temp_p'][i]
     true_R = extracted_data['radius_p'][i]
+    dist_s = extracted_data['distance_s'][i]
+    hz_out = extracted_data['hz_out'][i]
 
     snr_1 = eval(extracted_data['extracted_snrs'][i])[0]
     snr_2 = eval(extracted_data['extracted_FPRs'][i])[0]
@@ -82,6 +97,8 @@ for i in range(n_planets):
     SNR_dip = eval(extracted_data['extracted_SNR_ps_new'][i])[0]
     t_score = eval(extracted_data['extracted_t_scores'][i])[0]
     bayes_factor = eval(extracted_data['extracted_bayes_factors'][i], {'inf': float('inf')}, {'nan': float('nan')})[0]
+
+    # set edge case values to 100 or -100 to avoid crash
     if (any (num == np.inf for num in bayes_factor) or any (num == np.nan for num in bayes_factor)):
         for j in range(len(bayes_factor)):
             if (bayes_factor[j] == np.inf):
@@ -89,28 +106,32 @@ for i in range(n_planets):
             elif (bayes_factor[j] == np.nan):
                 bayes_factor[j] = -100
 
-    if (defining_criteria == 1 and snr_1 < 5):
+    # determine whether the extracted SNR is high enough
+    if (defining_criteria == 1 and snr_1 < SNR_threshold):
         total_fails += 1
         snr_limit_fails += 1
 
-    elif (defining_criteria == 2 and snr_2 < 5):
+    elif (defining_criteria == 2 and snr_2 < SNR_threshold):
         total_fails += 1
         snr_limit_fails += 1
 
-    elif (defining_criteria == 3 and snr_3 < 5):
+    elif (defining_criteria == 3 and snr_3 < SNR_threshold):
         total_fails += 1
         snr_limit_fails += 1
 
+    # determine whether the angular separation is correctly extracted
     elif ((r_extr > true_angsep*(1+angsep_accuracy_def)) or (r_extr < true_angsep*(1-angsep_accuracy_def))):
         total_fails += 1
         position_fails += 1
         r_fails += 1
 
+    # determine whether the azimuthal angle is correctly extracted
     elif ((np.abs(phi_extr-true_phi)+phi_accuracy_def) % 360 > phi_accuracy_def+phi_accuracy_def):
         total_fails += 1
         position_fails += 1
         ang_fails += 1
 
+    # add a planet that passes all criteria to the lists
     else:
         successes += 1
 
@@ -125,6 +146,8 @@ for i in range(n_planets):
         SNR_dips_used.append(SNR_dip)
         t_scores.append(t_score)
         bayes_factors.append(bayes_factor)
+        true_angseps.append(true_angsep)
+        radial_pixels.append(r_extr*image_size*dist_s/2/hz_out)
 
         #if either of the two methods were unsuccessful in calculating the sigma, set them both to 1 for simplicity
         if (snr_2==10000 or snr_3==10000):
@@ -141,7 +164,7 @@ for i in range(n_planets):
             SNR_ratios_3.append(snr_3 / snr_ps)
 
 
-#calculate the means and stds and print the results --------------------------------------------------------------------
+# calculate the means and stds and print the results -------------------------------------------------------------------
 SNR_ps_used = np.array(SNR_ps_used)
 SNR_ratios_1 = np.array(SNR_ratios_1)
 SNR_ratios_2 = np.array(SNR_ratios_2)
@@ -155,6 +178,8 @@ induced_dips = np.array(induced_dips)
 SNR_dips_used = np.array(SNR_dips_used)
 t_scores = np.array(t_scores)
 bayes_factors = np.array(bayes_factors)
+true_angseps = np.array(true_angseps)
+radial_pixels = np.array(radial_pixels)
 
 mean_SNR_ratio_1 = SNR_ratios_1.mean()
 std_SNR_ratio_1 = np.std(SNR_ratios_1)
@@ -199,10 +224,10 @@ print('R_est/R_true = ',np.round(mean_R_ratio,2),'+/-',np.round(std_R_ratio,2))
 print('')
 
 
-#plots to compare two of the SNRs --------------------------------------------------------------------------------------
+# plots to compare two of the SNRs -------------------------------------------------------------------------------------
 x = np.linspace(0,200,100)
 
-#Compare SNR_ps to SNR_1
+# compare SNR_ps to SNR_1
 plt.scatter(x=SNR_ratios_1*SNR_ps_used,y=SNR_ps_used,color='black',marker='x',s=20,label='all planets')
 plt.plot(x,x, color='blue',label='theoretical line')
 plt.title('Ratio of photon statistics SNR to naive extracted SNR')
@@ -212,15 +237,16 @@ plt.xlim((0,15))
 plt.ylim((0,15))
 plt.legend(loc='best')
 plt.grid()
-#Uncomment the following line to save
+# uncomment the following line to save
 #plt.savefig(path+'/06_plots/SNR_ps_to_SNR_1_changeme.pdf')
 plt.show()
 
-#Compare SNR_ps to SNR_2
+# compare SNR_ps to SNR_2
 best_fit = np.polyfit(x=SNR_ratios_2*SNR_ps_used,y=SNR_ps_used,deg=1)
 plt.scatter(x=SNR_ratios_2*SNR_ps_used,y=SNR_ps_used,color='black',marker='x',s=20,label='all planets')
 plt.plot(x,x, color='blue',label='theoretical line')
-#plt.plot(x,best_fit[1]*x+best_fit[0],label='linear fit '+'(bias:'+str(np.round(best_fit[0],3))+')',color='orange',linestyle='--')
+#plt.plot(x,best_fit[1]*x+best_fit[0],label='linear fit '+'(bias:'+str(np.round(best_fit[0],3))+')',
+#         color='orange',linestyle='--')
 plt.title('Ratio of photon statistics SNR to true position SNR')
 plt.xlabel('true position SNR ')
 plt.ylabel('photon statistics SNR')
@@ -228,25 +254,25 @@ plt.xlim((0,15))
 plt.ylim((0,15))
 plt.legend(loc='best')
 plt.grid()
-#Uncomment the following line to save
+# uncomment the following line to save
 #plt.savefig(path+'/06_plots/SNR_ps_to_SNR_2_changeme.pdf')
 plt.show()
 
-#Compare SNR_ps to SNR_3
+# compare SNR_ps to SNR_3
 plt.scatter(x=SNR_ratios_3*SNR_ps_used,y=SNR_ps_used,color='black',marker='x',s=20,label='all planets')
 plt.plot(x,x, color='blue',label='theoretical line')
 plt.title('Ratio of photon statistics SNR to max position SNR')
 plt.xlabel('max position SNR ')
 plt.ylabel('photon statistics SNR')
-plt.xlim((0,15))
-plt.ylim((0,15))
+plt.xlim((0,60))
+plt.ylim((0,60))
 plt.legend(loc='best')
 plt.grid()
-#Uncomment the following line to save
+# uncomment the following line to save
 #plt.savefig(path+'/06_plots/SNR_ps_to_SNR_3_changeme.pdf')
 plt.show()
 
-#compare SNR_2 to SNR_3
+# compare SNR_2 to SNR_3
 plt.scatter(x=SNR_ratios_2*SNR_ps_used,y=SNR_ratios_3*SNR_ps_used,color='black',marker='x',s=20,label='detected planets')
 plt.plot(x,x, color='blue',label='theoretical boundary')
 plt.title('Ratio of true position FPR to maximum position FPR')
@@ -256,26 +282,28 @@ plt.xlim((0,15))
 plt.ylim((0,15))
 plt.legend(loc='best')
 plt.grid()
-#Uncomment the following line to save
+# uncomment the following line to save
 #plt.savefig(path+'/06_plots/SNR_2_to_SNR_3_changeme.pdf')
 plt.show()
 
 
-#create histogram plots like figure 12 LIFE II -------------------------------------------------------------------------
-#lists with the variables to be shown as well as attributes
-variables = [extracted_data['snr_current'], extracted_data['temp_p'], extracted_data['radius_p'], extracted_data['angsep']*1000]
-number_bins = [40, 40, 30, 180]
+# create histogram plots like figure 12 LIFE II ------------------------------------------------------------------------
+# lists with the variables to be shown as well as attributes
+variables = [extracted_data['snr_current'], extracted_data['temp_p'], extracted_data['radius_p'],
+             extracted_data['angsep']*1000]
+number_bins = [100, 35, 35, 100]
 x_labels = ['SNR$_\mathrm{ps}$', '$T_\mathrm{p}$ [K]', '$R_\mathrm{p}$ [$R_\oplus$]', '$\Theta_\mathrm{p}$ [mas]']
-y_labels = ['# of planets per Universe', '# of planets per Universe', '# of planets per Universe', '# of planets per Universe']
-x_lims = [[0,175], [140,300], [0.7,1.5], [0,90]]
-y_lims = [[0,2], [0,2], [0,2], [0,2]]
+y_labels = ['# of planets per Universe', '# of planets per Universe', '# of planets per Universe',
+            '# of planets per Universe']
+x_lims = [[0,300], [100,240], [3.4,6.1], [0,140]]
+y_lims = [[0,1.0], [0,0.5], [0,1.0], [0,0.5]]
 
 n_universes = extracted_data['nuniverse'].nunique()
 
 
-#create figure and fill plots by running through for loop for all list entries
+# create figure and fill plots by running through for loop for all list entries
 fig, axes = plt.subplots(len(variables), 1, figsize=(6.4,9.6),)
-fig.suptitle('Rocky Cold Planets Distributions')
+fig.suptitle(label+' Planet Distributions')
 
 for i in range(len(variables)):
     ax = axes[i]
@@ -289,13 +317,13 @@ for i in range(len(variables)):
     ax.grid()
 
 plt.tight_layout()
-#Uncomment the following line to save
+# uncomment the following line to save
 #plt.savefig(path+'/06_plots/distributionplot_changeme.pdf')
 plt.show()
 
 
-#create cornerplot like figure 13 LIFE II ------------------------------------------------------------------------------
-#stack the plot input data
+# create cornerplot like figure 13 LIFE II -----------------------------------------------------------------------------
+# stack the plot input data
 data_SNR_ps_used = SNR_ps_used
 data_SNR_ratios_1 = SNR_ratios_1
 data_SNR_ratios_2 = SNR_ratios_2
@@ -311,10 +339,10 @@ elif (defining_criteria==2):
 elif (defining_criteria==3):
     data_SNR_ratios_used = data_SNR_ratios_3
 
-#Define the parameters you want to compare in the cornerplot here
+# define the parameters you want to compare in the cornerplot here
 all_data = np.vstack([data_SNR_ps_used, data_SNR_ratios_used, data_T_ratios, data_R_ratios, data_Theta_ratios])
 
-#define labels and quantiles
+# define labels and quantiles
 labels = ['SNR$_\mathrm{ps}$',
           'FPF$_\mathrm{est}$/SNR$_\mathrm{ps}$',
           '$T_\mathrm{est} / T_\mathrm{true}$',
@@ -323,19 +351,21 @@ labels = ['SNR$_\mathrm{ps}$',
 
 quantiles = [.159, .841]
 
-#define the main figure
+# define the main figure
 fig = plt.figure(figsize=(12, 12))
 fig = corner.corner(np.transpose(all_data), fig=fig, range=[(7, 30), (0.5, 1.2), (0.4, 1.6), (0.0, 2), (.88, 1.12)],
                     labels=labels, show_titles=True, hist_bin_factor=1.5, max_n_ticks=5,
-                    plot_density=False, plot_contours=False, no_fill_contours=True, color='darkblue', quantiles=quantiles)
+                    plot_density=False, plot_contours=False, no_fill_contours=True, color='darkblue',
+                    quantiles=quantiles)
 
-fig.text(0.95, 0.98, 'Exo-Earth Candidates', ha='right', va='top', fontsize=20, fontweight='bold')
+fig.text(0.95, 0.98, label+' Planets', ha='right', va='top', fontsize=20, fontweight='bold')
 fig.text(0.95, 0.93, 'Total planets: '+str(n_planets), ha='right', va='top', fontsize=16)
 fig.text(0.95, 0.90, 'Failed detections: '+str(snr_limit_fails), ha='right', va='top', fontsize=16)
 fig.text(0.95, 0.87, 'False location extractions: '+str(position_fails), ha='right', va='top', fontsize=16)
-fig.text(0.95, 0.84, 'Overall Success Rate: '+str(np.round(total_accuracy*100,2))+'%', ha='right', va='top', fontsize=16)
+fig.text(0.95, 0.84, 'Overall Success Rate: '+str(np.round(total_accuracy*100,2))+'%', ha='right', va='top',
+                                                    fontsize=16)
 
-#set limits and ticks
+# set limits and ticks
 for i in range(len(fig.axes)):
     ax = fig.axes[i]
     ax.grid(True)
@@ -384,31 +414,49 @@ fig.axes[0].plot(ax.get_xlim(), ax.get_ylim(), ls="--", c=".3")
 #fig.axes[16].add_patch(arrow_2)
 #fig.axes[11].add_patch(arrow_3)
 
-#circle = Ellipse((0.05,0.15),width=0.3, height=0.2, angle=-50, transform=fig.axes[5].transAxes, fill=False, color='violet', alpha=0.8, linewidth=4)
+#circle = Ellipse((0.05,0.15),width=0.3, height=0.2, angle=-50, transform=fig.axes[5].transAxes, fill=False,
+#                   color='violet', alpha=0.8, linewidth=4)
 #fig.axes[5].add_patch(circle)
 
-#Uncomment the following line to save
+# uncomment the following line to save
 #plt.savefig(path+'/06_plots/cornerplot_changeme.pdf')
 plt.show()
 
 
+# create scatter plot of spatial resolution vs angular separation ------------------------------------------------------
+plt.scatter(x=true_angseps,y=Theta_ratios,color='black',marker='x',s=2)
+plt.title(label+'s: Spatial resolution')
+plt.xlabel('Angular separation')
+plt.ylabel('$\Theta_\mathrm{est} / \Theta_\mathrm{true}$')
+plt.text(0.79, 0.92, r'$\mu = 0.98_{-0.03}^{+0.01}$', transform=plt.gca().transAxes,
+                 bbox=dict(facecolor='white', edgecolor='black', boxstyle='square', pad=0.5))
+plt.ylim((0.85,1.15))
+plt.grid()
+plt.show()
+
+plt.scatter(x=radial_pixels,y=Theta_ratios,color='black',marker='x',s=2)
+plt.show()
+
+
 # create plots with dips -----------------------------------------------------------------------------------------------
-#Compare SNR_ps with and without the dip
+# compare SNR_ps with and without the dip
 plt.scatter(x=SNR_dips_used,y=SNR_ps_used,color='black',marker='x',s=20,label='all planets')
-plt.plot(x,x, color='blue',label='theoretical line')
-#plt.plot(x,best_fit[1]*x+best_fit[0],label='linear fit '+'(bias:'+str(np.round(best_fit[0],3))+')',color='orange',linestyle='--')
-plt.title(r'Ratio of $\mathrm{SNR_{ps}}$ with and without induced dip')
+plt.plot(x,x, color='blue',label='no dip')
+#plt.plot(x,best_fit[1]*x+best_fit[0],label='linear fit '+'(bias:'+str(np.round(best_fit[0],3))+')',
+#                                                                   color='orange',linestyle='--')
+plt.title(label+r's: Ratio of $\mathrm{SNR_{ps}}$ with and without induced dip')
 plt.xlabel(r'$\mathrm{SNR_{ps}}$ with dip')
 plt.ylabel(r'$\mathrm{SNR_{ps}}$ without dip')
-plt.xlim((0,15))
-plt.ylim((0,15))
+plt.xlim((0,80))
+plt.ylim((0,80))
 plt.legend(loc='best')
 plt.grid()
-#Uncomment the following line to save
+# uncomment the following line to save
 #plt.savefig(path+'/06_plots/SNR_ps_to_SNR_2_changeme.pdf')
 plt.show()
 
 
+# define arrays to count number of successful dip detections
 n_induced_dips = np.zeros((n_molecules))
 
 TP_t_statistics_strong = np.zeros((n_molecules,successes))
@@ -432,7 +480,9 @@ FN_bayesian_models_decisive = np.zeros((n_molecules,successes))
 TN_bayesian_models_decisive = np.zeros((n_molecules,successes))
 
 
+# loop through all molecules in the set list
 for i in range(n_molecules):
+    # count how many times the molecular dip was induced
     n_induced_dips[i] = np.count_nonzero(induced_dips.T[i])
 
     if (n_induced_dips[i] == 0):
@@ -443,33 +493,45 @@ for i in range(n_molecules):
         TP_t_statistics_strong[i], FP_t_statistics_strong[i], FN_t_statistics_strong[i], \
             TN_t_statistics_strong[i], _, _ = get_rates(t_scores.T[i], induced_dips.T[i], strong_alpha, True)
         TP_bayesian_models_strong[i], FP_bayesian_models_strong[i], FN_bayesian_models_strong[i], \
-            TN_bayesian_models_strong[i], _, _ = get_rates(np.log10(bayes_factors.T[i]), induced_dips.T[i], strong_jeffrey, False)
+            TN_bayesian_models_strong[i], _, _ = get_rates(np.log10(bayes_factors.T[i]), induced_dips.T[i],
+                                                                                        strong_jeffrey, False)
         TP_t_statistics_decisive[i], FP_t_statistics_decisive[i], FN_t_statistics_decisive[i], \
             TN_t_statistics_decisive[i], _, _ = get_rates(t_scores.T[i], induced_dips.T[i], decisive_alpha, True)
         TP_bayesian_models_decisive[i], FP_bayesian_models_decisive[i], FN_bayesian_models_decisive[i], \
-            TN_bayesian_models_decisive[i], _, _ = get_rates(np.log10(bayes_factors.T[i]), induced_dips.T[i], decisive_jeffrey, False)
+            TN_bayesian_models_decisive[i], _, _ = get_rates(np.log10(bayes_factors.T[i]), induced_dips.T[i],
+                                                                                        decisive_jeffrey, False)
 
 
-        print('Induced', molecules_list[i], 'dips:', int(n_induced_dips[i]), '(', np.round(n_induced_dips[i]/successes*100,2), '% of all planets)')
+        print('Induced', molecules_list[i], 'dips:', int(n_induced_dips[i]), '(',
+                        np.round(n_induced_dips[i]/successes*100,2), '% of all planets)')
         print('')
 
         print('t-statistics (alpha = 0.01):')
-        print('True positive detections:', int(np.sum(TP_t_statistics_decisive[i])), '(', np.round(np.sum(TP_t_statistics_decisive[i])/successes*100,2), '% of all planets)')
-        print('False positive detections:', int(np.sum(FP_t_statistics_decisive[i])), '(', np.round(np.sum(FP_t_statistics_decisive[i]) / successes * 100, 2), '% of all planets)')
-        print('False negative detections:', int(np.sum(FN_t_statistics_decisive[i])), '(', np.round(np.sum(FN_t_statistics_decisive[i]) / successes * 100, 2), '% of all planets)')
-        print('True negative detections:', int(np.sum(TN_t_statistics_decisive[i])), '(', np.round(np.sum(TN_t_statistics_decisive[i]) / successes * 100, 2), '% of all planets)')
+        print('True positive detections:', int(np.sum(TP_t_statistics_strong[i])), '(',
+                                np.round(np.sum(TP_t_statistics_strong[i])/successes*100,2), '% of all planets)')
+        print('False positive detections:', int(np.sum(FP_t_statistics_strong[i])), '(',
+                                np.round(np.sum(FP_t_statistics_strong[i]) / successes * 100, 2), '% of all planets)')
+        print('False negative detections:', int(np.sum(FN_t_statistics_strong[i])), '(',
+                                np.round(np.sum(FN_t_statistics_strong[i]) / successes * 100, 2), '% of all planets)')
+        print('True negative detections:', int(np.sum(TN_t_statistics_strong[i])), '(',
+                                np.round(np.sum(TN_t_statistics_strong[i]) / successes * 100, 2), '% of all planets)')
 
         print('')
 
         print('Bayesian model selection (Jeffrey-factor = 2):')
-        print('True positive selections:', int(np.sum(TP_bayesian_models_decisive[i])), '(', np.round(np.sum(TP_bayesian_models_decisive[i]) / successes * 100, 2), '% of all planets)')
-        print('False positive selections:', int(np.sum(FP_bayesian_models_decisive[i])), '(', np.round(np.sum(FP_bayesian_models_decisive[i]) / successes * 100, 2), '% of all planets)')
-        print('False negative selections:', int(np.sum(FN_bayesian_models_decisive[i])), '(', np.round(np.sum(FN_bayesian_models_decisive[i]) / successes * 100, 2), '% of all planets)')
-        print('True negative selections:', int(np.sum(TN_bayesian_models_decisive[i])), '(', np.round(np.sum(TN_bayesian_models_decisive[i]) / successes * 100, 2), '% of all planets)')
+        print('True positive selections:', int(np.sum(TP_bayesian_models_strong[i])), '(',
+                            np.round(np.sum(TP_bayesian_models_strong[i]) / successes * 100, 2), '% of all planets)')
+        print('False positive selections:', int(np.sum(FP_bayesian_models_strong[i])), '(',
+                            np.round(np.sum(FP_bayesian_models_strong[i]) / successes * 100, 2), '% of all planets)')
+        print('False negative selections:', int(np.sum(FN_bayesian_models_strong[i])), '(',
+                            np.round(np.sum(FN_bayesian_models_strong[i]) / successes * 100, 2), '% of all planets)')
+        print('True negative selections:', int(np.sum(TN_bayesian_models_strong[i])), '(',
+                            np.round(np.sum(TN_bayesian_models_strong[i]) / successes * 100, 2), '% of all planets)')
 
         print('---------')
 
 
+        # define arrays to store ratios
         SNR_bins_1 = np.linspace(0,50,15, endpoint=False)
         SNR_bins_2 = np.linspace(50,100,5, endpoint=False)
         SNR_bins_3 = np.linspace(100,175,5)
@@ -494,7 +556,7 @@ for i in range(n_molecules):
         R_bayesian_models_ratios_strong = np.zeros_like(R_bins[:-1])
         R_bayesian_models_ratios_decisive = np.zeros_like(R_bins[:-1])
 
-
+        # get data for detection ratio vs SNR
         for j in range(SNR_bins.size-1):
             SNR_t_statistics_in_bin_strong = []
             SNR_t_statistics_in_bin_decisive = []
@@ -513,7 +575,7 @@ for i in range(n_molecules):
             SNR_bayesian_models_ratios_strong[j] = get_ratio_safe(SNR_bayesian_models_in_bin_strong)
             SNR_bayesian_models_ratios_decisive[j] = get_ratio_safe(SNR_bayesian_models_in_bin_decisive)
 
-
+        # get data for detection ratio vs T
         for j in range(T_bins.size - 1):
             T_t_statistics_in_bin_strong = []
             T_t_statistics_in_bin_decisive = []
@@ -532,7 +594,7 @@ for i in range(n_molecules):
             T_bayesian_models_ratios_strong[j] = get_ratio_safe(T_bayesian_models_in_bin_strong)
             T_bayesian_models_ratios_decisive[j] = get_ratio_safe(T_bayesian_models_in_bin_decisive)
 
-
+        # get data for detection ratio vs R
         for j in range(R_bins.size - 1):
             R_t_statistics_in_bin_strong = []
             R_t_statistics_in_bin_decisive = []
@@ -556,11 +618,13 @@ for i in range(n_molecules):
         T_bins = T_bins[:-1]
         R_bins = R_bins[:-1]
 
+        # plot detection ratio vs SNR (t-statistics)
         plt.scatter(x=SNR_bins,y=SNR_t_statistics_ratios_strong,color='grey',marker='x',s=20,label=r'$\alpha$=0.09')
         plt.plot(SNR_bins, SNR_t_statistics_ratios_strong, color='grey',alpha=0.5)
-        plt.scatter(x=SNR_bins, y=SNR_t_statistics_ratios_decisive, color='black', marker='x', s=20, label=r'$\alpha$=0.01')
+        plt.scatter(x=SNR_bins, y=SNR_t_statistics_ratios_decisive, color='black', marker='x', s=20,
+                                                                                            label=r'$\alpha$=0.01')
         plt.plot(SNR_bins, SNR_t_statistics_ratios_decisive, color='black', alpha=0.5)
-        plt.title(molecules_list[i]+': detections using t-statistics')
+        plt.title(molecules_list[i]+': detections using t-statistics ('+label+'s)')
         plt.xlabel(r'$\mathrm{SNR_{ps}}$ []')
         plt.ylabel(r'Fraction of planets []')
         plt.legend(loc='upper left')
@@ -568,11 +632,12 @@ for i in range(n_molecules):
         plt.grid()
         plt.show()
 
+        # plot detection ratio vs SNR (bayesian)
         plt.scatter(x=SNR_bins, y=SNR_bayesian_models_ratios_strong, color='grey', marker='x', s=20, label=r'$\mathrm{log_{10}}(K)$=1')
         plt.plot(SNR_bins, SNR_bayesian_models_ratios_strong, color='grey', alpha=0.5)
         plt.scatter(x=SNR_bins, y=SNR_bayesian_models_ratios_decisive, color='black', marker='x', s=20, label=r'$\mathrm{log_{10}}(K)$=2')
         plt.plot(SNR_bins, SNR_bayesian_models_ratios_decisive, color='black', alpha=0.5)
-        plt.title(molecules_list[i] + ': detections using Bayesian model selection')
+        plt.title(molecules_list[i] + ': detections using Bayesian model selection ('+label+'s)')
         plt.xlabel(r'$\mathrm{SNR_{ps}}$ []')
         plt.ylabel(r'Fraction of planets []')
         plt.legend(loc='upper left')
@@ -580,11 +645,12 @@ for i in range(n_molecules):
         plt.grid()
         plt.show()
 
+        # plot detection ratio vs T (t-statistics)
         plt.scatter(x=T_bins, y=T_t_statistics_ratios_strong, color='grey', marker='x', s=20, label=r'$\alpha$=0.09')
         plt.plot(T_bins, T_t_statistics_ratios_strong, color='grey', alpha=0.5)
         plt.scatter(x=T_bins, y=T_t_statistics_ratios_decisive, color='black', marker='x', s=20, label=r'$\alpha$=0.01')
         plt.plot(T_bins, T_t_statistics_ratios_decisive, color='black', alpha=0.5)
-        plt.title(molecules_list[i] + ': detections using t-statistics')
+        plt.title(molecules_list[i] + ': detections using t-statistics ('+label+'s)')
         plt.xlabel(r'T [K]')
         plt.ylabel(r'Fraction of planets []')
         plt.legend(loc='upper left')
@@ -592,13 +658,14 @@ for i in range(n_molecules):
         plt.grid()
         plt.show()
 
+        # plot detection ratio vs T (bayesian)
         plt.scatter(x=T_bins, y=T_bayesian_models_ratios_strong, color='grey', marker='x', s=20,
                     label=r'$\mathrm{log_{10}}(K)$=1')
         plt.plot(T_bins, T_bayesian_models_ratios_strong, color='grey', alpha=0.5)
         plt.scatter(x=T_bins, y=T_bayesian_models_ratios_decisive, color='black', marker='x', s=20,
                     label=r'$\mathrm{log_{10}}(K)$=2')
         plt.plot(T_bins, T_bayesian_models_ratios_decisive, color='black', alpha=0.5)
-        plt.title(molecules_list[i] + ': detections using Bayesian model selection')
+        plt.title(molecules_list[i] + ': detections using Bayesian model selection ('+label+'s)')
         plt.xlabel(r'T [K]')
         plt.ylabel(r'Fraction of planets []')
         plt.legend(loc='upper left')
@@ -606,11 +673,12 @@ for i in range(n_molecules):
         plt.grid()
         plt.show()
 
+        # plot detection ratio vs R (t-statistics)
         plt.scatter(x=R_bins, y=R_t_statistics_ratios_strong, color='grey', marker='x', s=20, label=r'$\alpha$=0.09')
         plt.plot(R_bins, R_t_statistics_ratios_strong, color='grey', alpha=0.5)
         plt.scatter(x=R_bins, y=R_t_statistics_ratios_decisive, color='black', marker='x', s=20, label=r'$\alpha$=0.01')
         plt.plot(R_bins, R_t_statistics_ratios_decisive, color='black', alpha=0.5)
-        plt.title(molecules_list[i] + ': detections using t-statistics')
+        plt.title(molecules_list[i] + ': detections using t-statistics ('+label+'s)')
         plt.xlabel(r'R [K]')
         plt.ylabel(r'Fraction of planets []')
         plt.legend(loc='upper left')
@@ -618,13 +686,14 @@ for i in range(n_molecules):
         plt.grid()
         plt.show()
 
+        # plot detection ratio vs R (bayesian)
         plt.scatter(x=R_bins, y=R_bayesian_models_ratios_strong, color='grey', marker='x', s=20,
                     label=r'$\mathrm{log_{10}}(K)$=1')
         plt.plot(R_bins, R_bayesian_models_ratios_strong, color='grey', alpha=0.5)
         plt.scatter(x=R_bins, y=R_bayesian_models_ratios_decisive, color='black', marker='x', s=20,
                     label=r'$\mathrm{log_{10}}(K)$=2')
         plt.plot(R_bins, R_bayesian_models_ratios_decisive, color='black', alpha=0.5)
-        plt.title(molecules_list[i] + ': detections using Bayesian model selection')
+        plt.title(molecules_list[i] + ': detections using Bayesian model selection ('+label+'s)')
         plt.xlabel(r'R [K]')
         plt.ylabel(r'Fraction of planets []')
         plt.legend(loc='upper left')
@@ -632,34 +701,36 @@ for i in range(n_molecules):
         plt.grid()
         plt.show()
 
+
+        # calculate ROC curves
         alpha_array = np.linspace(0, 1, 100)
         TPR_array_t_statistics = np.empty_like(alpha_array)
         FPR_array_t_statistics = np.empty_like(alpha_array)
 
-        jeffrey_array = np.linspace(10, -7, 100) # theoretically from inf to -inf but this about covers it
+        jeffrey_array = np.linspace(30,-30, 1000) # theoretically from inf to -inf but this about covers it
         TPR_array_bayesian_models = np.empty_like(jeffrey_array)
         FPR_array_bayesian_models = np.empty_like(jeffrey_array)
 
         for l in range(alpha_array.size):
-            _, _, _, _, TPR_array_t_statistics[l], FPR_array_t_statistics[l] = get_rates(t_scores.T[i],
-                                                                                             induced_dips.T[i],
-                                                                                             alpha_array[l], True)
+            _, _, _, _, TPR_array_t_statistics[l], FPR_array_t_statistics[l] = get_rates(
+                                            t_scores.T[i], induced_dips.T[i], alpha_array[l], True)
         for l in range(jeffrey_array.size):
-            _, _, _, _, TPR_array_bayesian_models[l], FPR_array_bayesian_models[l] = get_rates(np.log10(bayes_factors.T[i]), induced_dips.T[i],
-                                                                           jeffrey_array[l], False)
+            _, _, _, _, TPR_array_bayesian_models[l], FPR_array_bayesian_models[l] = get_rates(
+                                            np.log10(bayes_factors.T[i]), induced_dips.T[i], jeffrey_array[l], False)
 
-
+        # calculate AUC using the trapez rule
         AUC_t_statistics = 0
         AUC_bayesian_models = 0
 
-        # calculate the AUC using the trapez rule
         for j in range(1, FPR_array_t_statistics.size):
-            AUC_t_statistics += (TPR_array_t_statistics[j] + TPR_array_t_statistics[j - 1]) * (FPR_array_t_statistics[j] - FPR_array_t_statistics[j-1]) / 2
-
+            AUC_t_statistics += (TPR_array_t_statistics[j] + TPR_array_t_statistics[j - 1]) * \
+                                                (FPR_array_t_statistics[j] - FPR_array_t_statistics[j-1]) / 2
+        AUC_t_statistics += 1 * (1-np.max(FPR_array_t_statistics))
 
         for j in range(1, FPR_array_bayesian_models.size):
-            AUC_bayesian_models += (TPR_array_bayesian_models[j] + TPR_array_bayesian_models[j - 1]) * (FPR_array_bayesian_models[j] - FPR_array_bayesian_models[j - 1]) / 2
-
+            AUC_bayesian_models += (TPR_array_bayesian_models[j] + TPR_array_bayesian_models[j - 1]) *\
+                                                (FPR_array_bayesian_models[j] - FPR_array_bayesian_models[j - 1]) / 2
+        AUC_bayesian_models += 1 * (1-np.max(FPR_array_bayesian_models))
 
         print(molecules_list[i], 'AUC-value for t-statistics:', np.round(AUC_t_statistics,3))
         print(molecules_list[i], 'AUC-value for Bayesian model selection:', np.round(AUC_bayesian_models, 3))
@@ -667,15 +738,17 @@ for i in range(n_molecules):
         print('')
 
 
+        # plot the ROC curves
         random_x = np.linspace(0,1,100)
 
-        plt.plot(FPR_array_t_statistics, TPR_array_t_statistics, label='t-test classification', color='green')
-        plt.plot(FPR_array_bayesian_models, TPR_array_bayesian_models, label='Bayesian model classification',
-                 color='royalblue')
+        plt.plot(FPR_array_t_statistics, TPR_array_t_statistics, label=f't-test classification (AUC = '
+                                                                   f'{np.round(AUC_t_statistics,2)})', color='green')
+        plt.plot(FPR_array_bayesian_models, TPR_array_bayesian_models, label=f'Bayesian model classification (AUC = '
+                                                             f'{np.round(AUC_bayesian_models,2)})',color='royalblue')
         plt.plot(random_x, random_x, label='random classification',color='dimgrey', linestyle='--')
-        plt.title(molecules_list[i]+': ROC curves')
+        plt.title(molecules_list[i]+': ROC curves for '+label+'s')
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
-        plt.legend(loc='best')
+        plt.legend(loc='lower right')
         plt.grid()
         plt.show()

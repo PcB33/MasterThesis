@@ -8,13 +8,13 @@ import scipy as sp
 import sys as sys
 
 
-#create bus ------------------------------------------------------------------------------------------------------------
+# create bus -----------------------------------------------------------------------------------------------------------
 ex_bus = ls.Bus()
 
-#set basic scenario
+# set basic scenario
 ex_bus.data.options.set_scenario('baseline')
 
-#import catalog
+# import catalog
 ex_bus.data.import_catalog(path+'05_output_files/standard_simulations/standard10_scen1_spectrum.hdf5')
 
 # set the resolution to the required level
@@ -25,6 +25,8 @@ elif (L_used == 77):
     ex_bus.data.options.set_manual(spec_res=50.)
 elif (L_used == 154):
     ex_bus.data.options.set_manual(spec_res=100.)
+elif (L_used == 16):
+    ex_bus.data.options.set_manual(spec_res=10.)
 
 # add the instrument, transmission, extraction and noise modules and connect them
 instrument = ls.Instrument(name='inst')
@@ -54,38 +56,109 @@ ex_bus.connect(('star', 'transm'))
 ex_bus.connect(('extr', 'inst'))
 ex_bus.connect(('extr', 'transm'))
 
-#perform instrument.apply_options() in order to be able to create the extraction class
+# perform instrument.apply_options() in order to be able to create the extraction class
 instrument.apply_options()
 
 np.set_printoptions(threshold=sys.maxsize)
 
-#define variables ------------------------------------------------------------------------------------------------------
-planet_number = 5 #118 #5 #2785 #11 #24 #4 #2798 #17 #2 #0
+'''
+#This part of the code creates the test planet from the old lifesim version (used to test the new version). To make it
+# run, uncomment this part and define the planet_number variable to be =0. Additionally, the following changes must be 
+# made to other parts of the code:
+# (1) In Extraction.py --> single_spectrum_extraction --> self.signals, self.ideal_signals = self.inst.get_signal(),
+#       replace the argument for  flux_planet_spectrum with flux_planet_spectrum=[self.wl_bins * u.meter, 
+#        self.single_data_row['planet_flux_use'][0] * u.photon / u.second / (u.meter ** 3)]
+# (2) In instrument.py --> get_signals(), change  the line self.adjust_bl_to_hz(hz_center=hz_center,
+#        distance_s=distance_s) to self.data.inst['bl'] = self.data.catalog['baseline'][0]
+first_row=pd.DataFrame(ex_bus.data.catalog.iloc[0]).transpose()
+first_row['distance_s'][0]=15.25
+first_row['radius_s'][0]=1
+first_row['temp_s'][0]=5778 * 1
+first_row['l_sun'][0]=1
+first_row['radius_p'][0]=1.25
+first_row['semimajor_p'][0]=1.76
+first_row['angsep'][0] = first_row['semimajor_p'][0]/first_row['distance_s'][0]
+first_row['z'][0]=3
+first_row['temp_p'][0]=191.90
+first_row['baseline'][0] = 15.817 #optimal
+first_row['int_time'][0] = 400*55*60*60
+first_row['hz_in'][0] = 0.75
+first_row['hz_out'][0] = 1.76
+first_row['hz_center'][0] = 1.254
+first_row['habitable'][0] = True
+first_row['s_in'][0] = 1.766
+first_row['s_out'][0] = 0.324
+first_row['detected'][0] = True
+first_row['lat'][0] = np.pi/4
+fgamma = black_body(mode='planet',
+                    bins=ex_bus.data.inst['wl_bins'],
+                    width=ex_bus.data.inst['wl_bin_widths'],
+                    temp=first_row['temp_p'][0],
+                    radius=first_row['radius_p'][0],
+                    distance=first_row['distance_s'][0]) \
+                    / ex_bus.data.inst['wl_bin_widths']
+first_row['planet_flux_use'][0] = [fgamma]
+#dummy (not actually used)
+first_row['p_orb'][0] = 10
+first_row['mass_p'][0] = 2
+first_row['ecc_p'][0] = 0
+first_row['inc_p'][0] = 0
+first_row['large_omega_p'][0] = 1
+first_row['small_omega_p'][0] = 1
+first_row['theta_p'][0] = 1
+first_row['albedo_geom_mir'][0] = 0.05
+first_row['albedo_geom_mir'][0] = 0.05
+first_row['sep_p'][0] = first_row['semimajor_p'][0]
+first_row['maxangsep'][0] = first_row['sep_p'][0]
+first_row['flux_p'][0] = 0 #?????
+first_row['fp'][0] = 0 #??????
+first_row['mass_s'][0] = 1
+first_row['ra'][0] = 100
+first_row['dec'][0] = 50
+first_row['nuniverse'][0] = 0
+first_row['nstar'][0] = 0
+first_row['stype'][0] = 'G'
+first_row['id'][0] = -1
+first_row['name_s'][0] = 'None'
+first_row['lon'][0] = 1
+first_row['snr_1h'][0] = 0 #???
+first_row['photon_rate_planet'][0] = 0 #?????
+first_row['photon_rate_noise'][0] = 0 #????
+first_row['snr_current'][0] = 26 #????
+first_row['t_slew'][0] = 0
+ex_bus.data.catalog=pd.concat([first_row, ex_bus.data.catalog],ignore_index=True)
+'''
+
+
+
+# define variables -----------------------------------------------------------------------------------------------------
+planet_number = 2798 #118 #5 #2785 #11 #24 #4 #2798 #17 #2 #0
 n_runs = 1
 mu=0
 whitening_limit = 0
 angsep_accuracy_def = 0.15
 phi_accuracy_def = 10
+max_FoS = False
 
-include_dips = False
-atmospheric_scenario = mix_40
+include_dips = True
+atmospheric_scenario = Earth_like
 
 
-#Call the main_parameter_extraction function ---------------------------------------------------------------------------
+# call the main_parameter_extraction function --------------------------------------------------------------------------
 spectra, snrs, sigmas, Jmaxs, rss, phiss, Ts, Ts_sigma, Rs, Rs_sigma, FPRs, FPR_maxs,\
     induced_dips, t_scores, SNR_ps_news, bayes_factors = \
     extr.main_parameter_extraction(n_run=n_runs, plot=True, mu=mu,
                                    whitening_limit=whitening_limit, single_planet_mode=True,
-                                   planet_number=planet_number, include_dips=include_dips,
+                                   planet_number=planet_number, include_dips=include_dips, max_FoS=max_FoS,
                                    atmospheric_scenario=atmospheric_scenario, filepath=path+'05_output_files/')
 
 
-#Perform the data analysis ---------------------------------------------------------------------------------------------
-#Get median and MAD of extracted positions (angular separation and azimuthal position)
+# perform the data analysis --------------------------------------------------------------------------------------------
+# get median and MAD of extracted positions (angular separation and azimuthal position)
 r_median = st.median(rss)
 r_MAD = sp.stats.median_abs_deviation(rss)
 
-#modified phiss makes sure that e.g. azimuthal angle 1 and 359 are equivalent
+# modified phiss makes sure that e.g. azimuthal angle 1 and 359 are equivalent
 phiss_modified = np.empty_like(phiss)
 for i in range(phiss.size):
     phiss_modified[i] = np.minimum(np.abs(0.-phiss[i]),np.abs(360.-phiss[i]))
@@ -100,7 +173,7 @@ print('estimated phi (in degrees):',int(phi_median),'+/-',int(phi_MAD))
 print('')
 
 
-#Get SNR by extraction and by photon statistics
+# get SNR by extraction and by photon statistics
 mean_s = snrs.mean(axis=0)
 std_s = np.std(snrs)
 mean_FPR = FPRs.mean(axis=0)
@@ -115,9 +188,9 @@ print('FPR max extracted:', np.round(mean_FPR_max,5),'+/-',np.round(std_FPR_max,
 print('')
 
 
-#Get detection threshold and median/MAD of the extracted Jmaxs
+# get detection threshold and median/MAD of the extracted Jmaxs
 eta_threshold_5 = get_detection_threshold(L=extr.L,sigma=5)
-eta_max_threshold_5 = get_detection_threshold_max(L=extr.L, sigma=5, radial_ang_pix=extr.image_size/2)
+eta_max_threshold_5 = get_detection_threshold_max(L=extr.L, sigma=5, angsep=extr.single_data_row['angsep'])
 
 Jmax_median = st.median(Jmaxs)
 Jmax_MAD = sp.stats.median_abs_deviation(Jmaxs)
@@ -128,7 +201,7 @@ print('Median maximum of cost function J:',np.round(Jmax_median,0),'+/-',np.roun
 print('')
 
 
-#Count number of failed extractions. position_fails mean failed position extractions, total_fails means either
+# count number of failed extractions. position_fails mean failed position extractions, total_fails means either
 #   failed position extraction or J below threshold
 position_fails = 0
 total_fails = 0
@@ -152,7 +225,7 @@ print('Failed extractions: ',total_fails, ' => ',total_accuracy*100,'% success r
 print('')
 
 
-#Get estimated radius and temperature from the spectrum fit
+# get estimated radius and temperature from the spectrum fit
 T_median = st.median(Ts)
 T_MAD = sp.stats.median_abs_deviation(Ts)
 R_median = st.median(Rs)
@@ -165,7 +238,7 @@ print('fitted Rp (in R_earth) = ',np.round(R_median,2),'+/-',np.round(R_MAD,2))
 print('')
 
 
-#Count how many times planet is localized too close/far away from star
+# count how many times planet is localized too close/far away from star
 too_close = 0
 too_far = 0
 
